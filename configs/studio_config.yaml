@@ -1,0 +1,45 @@
+# YOLO Training Studio Configuration
+# ===================================
+# This file contains default settings for the training studio.
+# Modify these values to customize your setup.
+
+version: "1.0.0"
+
+# Directory paths
+datasets_dir: "datasets"
+exports_dir: "exports"
+runs_dir: "runs"
+
+# Default training parameters
+training:
+  epochs: 100
+  batch_size: 16
+  image_size: 640
+  learning_rate: 0.01
+  optimizer: "SGD"  # Options: SGD, Adam, AdamW, RMSProp
+  augmentation: true
+  pretrained: true
+  device: "0"  # GPU ID or "cpu"
+
+# Default export parameters
+export:
+  format: "onnx"  # Options: onnx, torchscript, engine, coreml, tflite, openvino
+  image_size: 640
+  half_precision: false
+  dynamic_batch: false
+  simplify: true
+
+# UI settings
+ui:
+  theme: "soft"
+  language: "en"
+  show_tips: true
+  auto_save: true
+  confirm_delete: true
+
+# Roboflow integration (optional)
+# roboflow_api_key: "your_api_key_here"
+
+# Recently used (auto-populated)
+recent_datasets: []
+recent_models: []
