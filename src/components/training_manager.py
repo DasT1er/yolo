@@ -428,7 +428,6 @@ def create_training_tab():
                     lines=20,
                     max_lines=30,
                     interactive=False,
-                    show_copy_button=True,
                 )
 
                 # Training Tips

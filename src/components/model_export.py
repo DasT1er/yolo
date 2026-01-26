@@ -272,7 +272,6 @@ def create_export_tab():
                     lines=15,
                     max_lines=20,
                     interactive=False,
-                    show_copy_button=True,
                 )
 
                 # Platform compatibility info

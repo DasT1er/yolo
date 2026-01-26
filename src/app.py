@@ -233,17 +233,7 @@ def create_header():
 def create_app():
     """Create the main Gradio application."""
 
-    with gr.Blocks(
-        css=CUSTOM_CSS,
-        js=CUSTOM_JS,
-        title="YOLO Training Studio",
-        theme=gr.themes.Soft(
-            primary_hue="indigo",
-            secondary_hue="purple",
-            neutral_hue="slate",
-            font=gr.themes.GoogleFont("Inter"),
-        ),
-    ) as app:
+    with gr.Blocks(title="YOLO Training Studio") as app:
 
         # Header
         create_header()
