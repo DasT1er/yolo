@@ -1,24 +1,22 @@
 """
-YOLO Training Studio - Simplified Professional Edition
-======================================================
+YOLO Training Studio - Professional Edition mit Labeling
+=========================================================
 
-Einfaches, benutzerfreundliches YOLO Training Tool.
-Klarer Workflow: Dataset → Training → Testen
+Komplettes YOLO Training Tool mit integriertem Labeling.
+Workflow: Dataset erstellen → Bilder labeln → Training → Testen
 
 Usage: python app.py
 """
 
 import customtkinter as ctk
-from tkinter import filedialog, messagebox
-from PIL import Image
+from tkinter import filedialog, messagebox, Canvas
+from PIL import Image, ImageTk, ImageDraw
 import threading
-import subprocess
 import sys
 import os
 from pathlib import Path
 import shutil
 import yaml
-import time
 
 
 # Theme
@@ -32,6 +30,382 @@ DANGER = "#ef4444"
 WARNING = "#f59e0b"
 BG_CARD = "#2d2d3d"
 TEXT_MUTED = "#94a3b8"
+
+
+class LabelingWindow(ctk.CTkToplevel):
+    """Fenster zum Labeln von Bildern mit Bounding Boxes."""
+
+    def __init__(self, parent, dataset_path, class_names):
+        super().__init__(parent)
+
+        self.title("Bild Labeling Tool")
+        self.geometry("1400x900")
+        self.minsize(1200, 800)
+
+        self.dataset_path = Path(dataset_path)
+        self.class_names = class_names
+        self.current_image_path = None
+        self.current_image = None
+        self.current_photo = None
+        self.boxes = []  # Liste von (x1, y1, x2, y2, class_id)
+        self.drawing = False
+        self.start_x = 0
+        self.start_y = 0
+        self.current_rect = None
+        self.scale = 1.0
+        self.offset_x = 0
+        self.offset_y = 0
+        self.selected_class = 0
+
+        # Bilder laden
+        self.image_list = []
+        self.current_index = 0
+        self.load_image_list()
+
+        self.create_ui()
+
+        if self.image_list:
+            self.load_image(0)
+
+    def load_image_list(self):
+        """Lädt alle Bilder aus dem Dataset."""
+        for split in ["train", "val"]:
+            img_dir = self.dataset_path / "images" / split
+            if img_dir.exists():
+                for ext in ["*.jpg", "*.jpeg", "*.png", "*.bmp", "*.webp"]:
+                    self.image_list.extend(list(img_dir.glob(ext)))
+        self.image_list = sorted(self.image_list)
+
+    def create_ui(self):
+        """Erstellt die UI."""
+        # Header
+        header = ctk.CTkFrame(self, height=60, fg_color=BG_CARD)
+        header.pack(fill="x", padx=10, pady=10)
+        header.pack_propagate(False)
+
+        ctk.CTkLabel(
+            header,
+            text="🏷️ Labeling Tool",
+            font=ctk.CTkFont(size=20, weight="bold")
+        ).pack(side="left", padx=15, pady=15)
+
+        # Navigation
+        nav = ctk.CTkFrame(header, fg_color="transparent")
+        nav.pack(side="right", padx=15)
+
+        ctk.CTkButton(nav, text="◀ Zurück", command=self.prev_image, width=100).pack(side="left", padx=5)
+        self.img_counter = ctk.CTkLabel(nav, text="0/0")
+        self.img_counter.pack(side="left", padx=15)
+        ctk.CTkButton(nav, text="Weiter ▶", command=self.next_image, width=100).pack(side="left", padx=5)
+
+        # Main Content
+        main = ctk.CTkFrame(self, fg_color="transparent")
+        main.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+
+        # Linke Seite - Controls
+        left = ctk.CTkFrame(main, fg_color=BG_CARD, width=280, corner_radius=10)
+        left.pack(side="left", fill="y", padx=(0, 10))
+        left.pack_propagate(False)
+
+        ctk.CTkLabel(left, text="🏷️ Klasse auswählen:", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=15, pady=(15, 5))
+
+        # Klassen-Buttons
+        self.class_buttons = []
+        colors = ["#ef4444", "#f59e0b", "#22c55e", "#3b82f6", "#8b5cf6", "#ec4899", "#06b6d4", "#84cc16"]
+        for i, cls in enumerate(self.class_names):
+            color = colors[i % len(colors)]
+            btn = ctk.CTkButton(
+                left,
+                text=f"{i}: {cls}",
+                command=lambda idx=i: self.select_class(idx),
+                fg_color=color if i == 0 else "transparent",
+                hover_color=color,
+                border_width=2,
+                border_color=color
+            )
+            btn.pack(fill="x", padx=15, pady=3)
+            self.class_buttons.append((btn, color))
+
+        # Trennlinie
+        ctk.CTkFrame(left, height=2, fg_color="#404050").pack(fill="x", padx=15, pady=15)
+
+        # Aktionen
+        ctk.CTkLabel(left, text="⚡ Aktionen:", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=15, pady=(0, 10))
+
+        ctk.CTkButton(
+            left, text="💾 Labels speichern",
+            command=self.save_labels,
+            fg_color=SUCCESS,
+            width=240
+        ).pack(padx=15, pady=5)
+
+        ctk.CTkButton(
+            left, text="🗑️ Alle Boxen löschen",
+            command=self.clear_boxes,
+            fg_color=DANGER,
+            width=240
+        ).pack(padx=15, pady=5)
+
+        ctk.CTkButton(
+            left, text="↩️ Letzte Box löschen",
+            command=self.delete_last_box,
+            width=240
+        ).pack(padx=15, pady=5)
+
+        # Hilfe
+        help_frame = ctk.CTkFrame(left, fg_color="#1e3a5f", corner_radius=10)
+        help_frame.pack(fill="x", padx=15, pady=20)
+
+        ctk.CTkLabel(
+            help_frame,
+            text="💡 Anleitung:",
+            font=ctk.CTkFont(weight="bold")
+        ).pack(anchor="w", padx=10, pady=(10, 5))
+
+        ctk.CTkLabel(
+            help_frame,
+            text="1. Klasse oben auswählen\n"
+                 "2. Auf dem Bild ziehen um\n"
+                 "   eine Box zu zeichnen\n"
+                 "3. Labels speichern\n"
+                 "4. Weiter zum nächsten Bild",
+            text_color=TEXT_MUTED,
+            justify="left"
+        ).pack(anchor="w", padx=10, pady=(0, 10))
+
+        # Box-Liste
+        ctk.CTkLabel(left, text="📦 Boxen:", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=15, pady=(10, 5))
+
+        self.box_list = ctk.CTkTextbox(left, height=150)
+        self.box_list.pack(fill="x", padx=15, pady=(0, 15))
+
+        # Rechte Seite - Canvas für Bild
+        right = ctk.CTkFrame(main, fg_color=BG_CARD, corner_radius=10)
+        right.pack(side="right", fill="both", expand=True)
+
+        # Canvas für Bild und Boxen
+        self.canvas = Canvas(right, bg="#1a1a2e", highlightthickness=0)
+        self.canvas.pack(fill="both", expand=True, padx=10, pady=10)
+
+        # Mouse Events
+        self.canvas.bind("<ButtonPress-1>", self.on_mouse_down)
+        self.canvas.bind("<B1-Motion>", self.on_mouse_move)
+        self.canvas.bind("<ButtonRelease-1>", self.on_mouse_up)
+
+        # Resize Event
+        self.canvas.bind("<Configure>", self.on_resize)
+
+    def select_class(self, idx):
+        """Wählt eine Klasse aus."""
+        self.selected_class = idx
+        for i, (btn, color) in enumerate(self.class_buttons):
+            if i == idx:
+                btn.configure(fg_color=color)
+            else:
+                btn.configure(fg_color="transparent")
+
+    def load_image(self, index):
+        """Lädt ein Bild."""
+        if not self.image_list or index < 0 or index >= len(self.image_list):
+            return
+
+        self.current_index = index
+        self.current_image_path = self.image_list[index]
+
+        # Bild laden
+        self.current_image = Image.open(self.current_image_path)
+
+        # Labels laden falls vorhanden
+        self.load_labels()
+
+        # Anzeigen
+        self.display_image()
+        self.update_counter()
+        self.update_box_list()
+
+    def load_labels(self):
+        """Lädt vorhandene Labels für das aktuelle Bild."""
+        self.boxes = []
+
+        if not self.current_image_path:
+            return
+
+        # Label-Pfad berechnen
+        label_path = self.get_label_path()
+
+        if label_path.exists():
+            img_w, img_h = self.current_image.size
+            with open(label_path, 'r') as f:
+                for line in f:
+                    parts = line.strip().split()
+                    if len(parts) >= 5:
+                        cls_id = int(parts[0])
+                        cx, cy, w, h = map(float, parts[1:5])
+                        # YOLO Format zu Pixel konvertieren
+                        x1 = int((cx - w/2) * img_w)
+                        y1 = int((cy - h/2) * img_h)
+                        x2 = int((cx + w/2) * img_w)
+                        y2 = int((cy + h/2) * img_h)
+                        self.boxes.append((x1, y1, x2, y2, cls_id))
+
+    def get_label_path(self):
+        """Gibt den Pfad zur Label-Datei zurück."""
+        # images/train/img.jpg -> labels/train/img.txt
+        rel_path = self.current_image_path.relative_to(self.dataset_path / "images")
+        label_path = self.dataset_path / "labels" / rel_path.with_suffix(".txt")
+        return label_path
+
+    def display_image(self):
+        """Zeigt das Bild auf dem Canvas an."""
+        if not self.current_image:
+            return
+
+        self.canvas.delete("all")
+
+        # Canvas-Größe
+        canvas_w = self.canvas.winfo_width()
+        canvas_h = self.canvas.winfo_height()
+
+        if canvas_w < 10 or canvas_h < 10:
+            return
+
+        # Skalierung berechnen
+        img_w, img_h = self.current_image.size
+        scale_w = canvas_w / img_w
+        scale_h = canvas_h / img_h
+        self.scale = min(scale_w, scale_h, 1.0)  # Maximal Originalgröße
+
+        new_w = int(img_w * self.scale)
+        new_h = int(img_h * self.scale)
+
+        # Offset für Zentrierung
+        self.offset_x = (canvas_w - new_w) // 2
+        self.offset_y = (canvas_h - new_h) // 2
+
+        # Bild skalieren und anzeigen
+        resized = self.current_image.resize((new_w, new_h), Image.Resampling.LANCZOS)
+        self.current_photo = ImageTk.PhotoImage(resized)
+        self.canvas.create_image(self.offset_x, self.offset_y, anchor="nw", image=self.current_photo)
+
+        # Boxen zeichnen
+        colors = ["#ef4444", "#f59e0b", "#22c55e", "#3b82f6", "#8b5cf6", "#ec4899", "#06b6d4", "#84cc16"]
+        for x1, y1, x2, y2, cls_id in self.boxes:
+            # Koordinaten skalieren
+            sx1 = int(x1 * self.scale) + self.offset_x
+            sy1 = int(y1 * self.scale) + self.offset_y
+            sx2 = int(x2 * self.scale) + self.offset_x
+            sy2 = int(y2 * self.scale) + self.offset_y
+
+            color = colors[cls_id % len(colors)]
+            self.canvas.create_rectangle(sx1, sy1, sx2, sy2, outline=color, width=2)
+
+            # Label
+            label = self.class_names[cls_id] if cls_id < len(self.class_names) else f"Klasse {cls_id}"
+            self.canvas.create_text(sx1 + 5, sy1 + 5, text=label, fill=color, anchor="nw", font=("Arial", 10, "bold"))
+
+    def on_resize(self, event):
+        """Wird aufgerufen wenn Canvas-Größe sich ändert."""
+        self.display_image()
+
+    def on_mouse_down(self, event):
+        """Maus gedrückt - Start einer Box."""
+        self.drawing = True
+        self.start_x = event.x
+        self.start_y = event.y
+        self.current_rect = self.canvas.create_rectangle(
+            event.x, event.y, event.x, event.y,
+            outline="#ffffff", width=2, dash=(4, 4)
+        )
+
+    def on_mouse_move(self, event):
+        """Maus bewegt - Box vergrößern."""
+        if self.drawing and self.current_rect:
+            self.canvas.coords(self.current_rect, self.start_x, self.start_y, event.x, event.y)
+
+    def on_mouse_up(self, event):
+        """Maus losgelassen - Box fertig."""
+        if not self.drawing:
+            return
+
+        self.drawing = False
+
+        if self.current_rect:
+            self.canvas.delete(self.current_rect)
+            self.current_rect = None
+
+        # Koordinaten zurück in Bildpixel umrechnen
+        x1 = int((min(self.start_x, event.x) - self.offset_x) / self.scale)
+        y1 = int((min(self.start_y, event.y) - self.offset_y) / self.scale)
+        x2 = int((max(self.start_x, event.x) - self.offset_x) / self.scale)
+        y2 = int((max(self.start_y, event.y) - self.offset_y) / self.scale)
+
+        # Prüfen ob Box groß genug
+        if abs(x2 - x1) > 10 and abs(y2 - y1) > 10:
+            # Clipping auf Bildgrenzen
+            img_w, img_h = self.current_image.size
+            x1 = max(0, min(x1, img_w))
+            y1 = max(0, min(y1, img_h))
+            x2 = max(0, min(x2, img_w))
+            y2 = max(0, min(y2, img_h))
+
+            self.boxes.append((x1, y1, x2, y2, self.selected_class))
+            self.display_image()
+            self.update_box_list()
+
+    def update_box_list(self):
+        """Aktualisiert die Box-Liste."""
+        self.box_list.delete("1.0", "end")
+        for i, (x1, y1, x2, y2, cls_id) in enumerate(self.boxes):
+            cls_name = self.class_names[cls_id] if cls_id < len(self.class_names) else f"Klasse {cls_id}"
+            self.box_list.insert("end", f"{i+1}. {cls_name}\n")
+
+    def update_counter(self):
+        """Aktualisiert den Bild-Zähler."""
+        self.img_counter.configure(text=f"{self.current_index + 1}/{len(self.image_list)}")
+
+    def save_labels(self):
+        """Speichert die Labels im YOLO-Format."""
+        if not self.current_image_path:
+            return
+
+        label_path = self.get_label_path()
+        label_path.parent.mkdir(parents=True, exist_ok=True)
+
+        img_w, img_h = self.current_image.size
+
+        with open(label_path, 'w') as f:
+            for x1, y1, x2, y2, cls_id in self.boxes:
+                # Pixel zu YOLO Format konvertieren
+                cx = ((x1 + x2) / 2) / img_w
+                cy = ((y1 + y2) / 2) / img_h
+                w = (x2 - x1) / img_w
+                h = (y2 - y1) / img_h
+                f.write(f"{cls_id} {cx:.6f} {cy:.6f} {w:.6f} {h:.6f}\n")
+
+        messagebox.showinfo("Gespeichert", f"Labels gespeichert!\n{label_path}")
+
+    def clear_boxes(self):
+        """Löscht alle Boxen."""
+        self.boxes = []
+        self.display_image()
+        self.update_box_list()
+
+    def delete_last_box(self):
+        """Löscht die letzte Box."""
+        if self.boxes:
+            self.boxes.pop()
+            self.display_image()
+            self.update_box_list()
+
+    def prev_image(self):
+        """Vorheriges Bild."""
+        if self.current_index > 0:
+            self.load_image(self.current_index - 1)
+
+    def next_image(self):
+        """Nächstes Bild."""
+        if self.current_index < len(self.image_list) - 1:
+            self.load_image(self.current_index + 1)
 
 
 class YOLOStudio(ctk.CTk):
@@ -53,8 +427,9 @@ class YOLOStudio(ctk.CTk):
         self.modelle_path.mkdir(exist_ok=True)
 
         # Status
-        self.training_process = None
+        self.training_thread = None
         self.is_training = False
+        self.stop_training_flag = False
         self.current_dataset = None
         self.test_image_path = None
 
@@ -81,12 +456,14 @@ class YOLOStudio(ctk.CTk):
         self.tabview = ctk.CTkTabview(self, corner_radius=15)
         self.tabview.pack(fill="both", expand=True, padx=20, pady=(0, 20))
 
-        # Nur 3 einfache Tabs
+        # 4 Tabs inkl. Labeling
         self.tab1 = self.tabview.add("1️⃣ Dataset")
-        self.tab2 = self.tabview.add("2️⃣ Training")
-        self.tab3 = self.tabview.add("3️⃣ Testen")
+        self.tab2 = self.tabview.add("2️⃣ Labeling")
+        self.tab3 = self.tabview.add("3️⃣ Training")
+        self.tab4 = self.tabview.add("4️⃣ Testen")
 
         self.create_dataset_tab()
+        self.create_labeling_tab()
         self.create_training_tab()
         self.create_testing_tab()
 
@@ -101,7 +478,7 @@ class YOLOStudio(ctk.CTk):
 
     # ==================== TAB 1: DATASET ====================
     def create_dataset_tab(self):
-        """Dataset Management - Import, Bilder hinzufügen, Info anzeigen."""
+        """Dataset Management - Import, erstellen."""
         main = ctk.CTkFrame(self.tab1, fg_color="transparent")
         main.pack(fill="both", expand=True, padx=15, pady=15)
 
@@ -129,17 +506,17 @@ class YOLOStudio(ctk.CTk):
 
         ctk.CTkButton(
             btn_frame,
-            text="📥 Importieren",
-            command=self.import_dataset,
+            text="📥 ZIP Import",
+            command=self.import_zip_dialog,
             width=150,
             fg_color=PRIMARY
         ).pack(side="left", padx=5)
 
-        # Rechte Seite - Dataset Details
+        # Rechte Seite - Dataset Details & Erstellen
         right = ctk.CTkFrame(main, fg_color=BG_CARD, corner_radius=15)
         right.pack(side="right", fill="both", expand=True)
 
-        # Oben - Info
+        # Info
         info_frame = ctk.CTkFrame(right, fg_color="transparent")
         info_frame.pack(fill="x", padx=25, pady=20)
 
@@ -147,44 +524,11 @@ class YOLOStudio(ctk.CTk):
 
         self.dataset_info = ctk.CTkLabel(
             info_frame,
-            text="Wähle links ein Dataset aus oder importiere eines.",
+            text="Wähle links ein Dataset aus oder erstelle ein neues.",
             text_color=TEXT_MUTED,
             justify="left"
         )
         self.dataset_info.pack(anchor="w", pady=10)
-
-        # Trennlinie
-        ctk.CTkFrame(right, height=2, fg_color="#404050").pack(fill="x", padx=25, pady=10)
-
-        # Bilder hinzufügen
-        add_frame = ctk.CTkFrame(right, fg_color="transparent")
-        add_frame.pack(fill="x", padx=25, pady=10)
-
-        ctk.CTkLabel(add_frame, text="➕ Bilder hinzufügen", font=ctk.CTkFont(size=18, weight="bold")).pack(anchor="w")
-
-        ctk.CTkLabel(
-            add_frame,
-            text="Füge Bilder zu deinem Dataset hinzu. Die Labels müssen im YOLO-Format vorliegen.",
-            text_color=TEXT_MUTED,
-            wraplength=600
-        ).pack(anchor="w", pady=5)
-
-        btn_row = ctk.CTkFrame(add_frame, fg_color="transparent")
-        btn_row.pack(fill="x", pady=10)
-
-        self.split_var = ctk.StringVar(value="train")
-        ctk.CTkLabel(btn_row, text="Ziel:").pack(side="left", padx=(0, 10))
-        ctk.CTkRadioButton(btn_row, text="Training (80%)", variable=self.split_var, value="train").pack(side="left", padx=10)
-        ctk.CTkRadioButton(btn_row, text="Validierung (20%)", variable=self.split_var, value="val").pack(side="left", padx=10)
-
-        ctk.CTkButton(
-            add_frame,
-            text="🖼️ Bilder auswählen und hinzufügen",
-            command=self.add_images_to_dataset,
-            width=300,
-            height=40,
-            fg_color=SUCCESS
-        ).pack(anchor="w", pady=10)
 
         # Trennlinie
         ctk.CTkFrame(right, height=2, fg_color="#404050").pack(fill="x", padx=25, pady=10)
@@ -214,22 +558,46 @@ class YOLOStudio(ctk.CTk):
             fg_color=PRIMARY
         ).grid(row=2, column=1, pady=15, sticky="w", padx=10)
 
-        # Hilfe-Box
+        # Bilder hinzufügen
+        ctk.CTkFrame(right, height=2, fg_color="#404050").pack(fill="x", padx=25, pady=10)
+
+        add_frame = ctk.CTkFrame(right, fg_color="transparent")
+        add_frame.pack(fill="x", padx=25, pady=10)
+
+        ctk.CTkLabel(add_frame, text="🖼️ Bilder hinzufügen", font=ctk.CTkFont(size=18, weight="bold")).pack(anchor="w")
+
+        btn_row = ctk.CTkFrame(add_frame, fg_color="transparent")
+        btn_row.pack(fill="x", pady=10)
+
+        self.split_var = ctk.StringVar(value="train")
+        ctk.CTkRadioButton(btn_row, text="Training", variable=self.split_var, value="train").pack(side="left", padx=10)
+        ctk.CTkRadioButton(btn_row, text="Validierung", variable=self.split_var, value="val").pack(side="left", padx=10)
+
+        ctk.CTkButton(
+            add_frame,
+            text="🖼️ Bilder hinzufügen (ohne Labels)",
+            command=self.add_images_to_dataset,
+            width=300,
+            height=40,
+            fg_color=SUCCESS
+        ).pack(anchor="w", pady=5)
+
+        # Hilfe
         help_frame = ctk.CTkFrame(right, fg_color="#1e3a5f", corner_radius=10)
         help_frame.pack(fill="x", padx=25, pady=20)
 
         ctk.CTkLabel(
             help_frame,
-            text="💡 Tipp: Roboflow Dataset importieren",
+            text="💡 Workflow:",
             font=ctk.CTkFont(weight="bold")
         ).pack(anchor="w", padx=15, pady=(15, 5))
 
         ctk.CTkLabel(
             help_frame,
-            text="1. Exportiere dein Roboflow Dataset als 'YOLOv8' Format\n"
-                 "2. Lade die ZIP-Datei herunter\n"
-                 "3. Klicke auf '📥 Importieren' und wähle die ZIP\n"
-                 "4. Das Dataset ist sofort einsatzbereit!",
+            text="1. Dataset erstellen mit Klassen\n"
+                 "2. Bilder hinzufügen\n"
+                 "3. Im 'Labeling' Tab Objekte markieren\n"
+                 "4. Training starten",
             text_color=TEXT_MUTED,
             justify="left"
         ).pack(anchor="w", padx=15, pady=(0, 15))
@@ -244,16 +612,13 @@ class YOLOStudio(ctk.CTk):
         datasets = []
         if self.datasets_path.exists():
             for d in self.datasets_path.iterdir():
-                if d.is_dir():
-                    # Prüfe ob data.yaml existiert
-                    yaml_path = d / "data.yaml"
-                    if yaml_path.exists():
-                        datasets.append(d)
+                if d.is_dir() and (d / "data.yaml").exists():
+                    datasets.append(d)
 
         if not datasets:
             ctk.CTkLabel(
                 self.dataset_list,
-                text="Keine Datasets gefunden.\n\nImportiere ein Dataset\noder erstelle ein neues.",
+                text="Keine Datasets.\n\nErstelle ein neues\noder importiere eines.",
                 text_color=TEXT_MUTED
             ).pack(pady=50)
             return
@@ -263,7 +628,6 @@ class YOLOStudio(ctk.CTk):
 
     def create_dataset_button(self, path):
         """Erstellt einen Button für ein Dataset."""
-        # Zähle Bilder
         train_count = len(list((path / "images" / "train").glob("*"))) if (path / "images" / "train").exists() else 0
         val_count = len(list((path / "images" / "val").glob("*"))) if (path / "images" / "val").exists() else 0
 
@@ -279,10 +643,9 @@ class YOLOStudio(ctk.CTk):
         btn.pack(fill="x", pady=3)
 
     def select_dataset(self, path):
-        """Wählt ein Dataset aus und zeigt Info an."""
+        """Wählt ein Dataset aus."""
         self.current_dataset = path
 
-        # Lade data.yaml
         yaml_path = path / "data.yaml"
         info_text = f"📁 Name: {path.name}\n"
 
@@ -290,7 +653,6 @@ class YOLOStudio(ctk.CTk):
             with open(yaml_path) as f:
                 data = yaml.safe_load(f)
 
-            # Klassen
             names = data.get("names", {})
             if isinstance(names, dict):
                 classes = list(names.values())
@@ -300,10 +662,7 @@ class YOLOStudio(ctk.CTk):
             info_text += f"\n🏷️ Klassen ({len(classes)}):\n"
             for i, cls in enumerate(classes[:10]):
                 info_text += f"   {i}: {cls}\n"
-            if len(classes) > 10:
-                info_text += f"   ... und {len(classes) - 10} weitere\n"
 
-        # Zähle Bilder
         train_imgs = len(list((path / "images" / "train").glob("*"))) if (path / "images" / "train").exists() else 0
         val_imgs = len(list((path / "images" / "val").glob("*"))) if (path / "images" / "val").exists() else 0
         train_labels = len(list((path / "labels" / "train").glob("*.txt"))) if (path / "labels" / "train").exists() else 0
@@ -313,58 +672,41 @@ class YOLOStudio(ctk.CTk):
         info_text += f"   Training: {train_imgs} Bilder, {train_labels} Labels\n"
         info_text += f"   Validierung: {val_imgs} Bilder, {val_labels} Labels\n"
 
-        # Prüfe ob bereit für Training
-        if train_imgs > 0 and train_labels > 0 and val_imgs > 0:
-            info_text += f"\n✅ Dataset ist bereit für Training!"
-        else:
-            info_text += f"\n⚠️ Dataset unvollständig - Bilder oder Labels fehlen"
+        if train_labels < train_imgs:
+            info_text += f"\n⚠️ {train_imgs - train_labels} Bilder noch nicht gelabelt!"
+        elif train_imgs > 0 and train_labels > 0:
+            info_text += f"\n✅ Bereit für Training!"
 
         self.dataset_info.configure(text=info_text)
 
-    def import_dataset(self):
-        """Importiert ein Dataset (ZIP oder Ordner)."""
-        choice = messagebox.askquestion(
-            "Import-Methode",
-            "ZIP-Datei importieren?\n\n'Ja' = ZIP-Datei\n'Nein' = Ordner",
-            icon='question'
+    def import_zip_dialog(self):
+        """Öffnet Dialog zum ZIP-Import."""
+        zip_file = filedialog.askopenfilename(
+            title="ZIP-Datei auswählen",
+            filetypes=[("ZIP", "*.zip")]
         )
-
-        if choice == 'yes':
-            # ZIP Import
-            zip_file = filedialog.askopenfilename(
-                title="ZIP-Datei auswählen",
-                filetypes=[("ZIP", "*.zip")]
-            )
-            if zip_file:
-                self.import_zip(Path(zip_file))
-        else:
-            # Ordner Import
-            folder = filedialog.askdirectory(title="Dataset-Ordner auswählen")
-            if folder:
-                self.import_folder(Path(folder))
+        if zip_file:
+            self.import_zip(Path(zip_file))
 
     def import_zip(self, zip_path):
-        """Importiert ein Dataset aus einer ZIP-Datei."""
+        """Importiert ein Dataset aus ZIP."""
         import zipfile
 
-        # Zielname
         name = zip_path.stem.replace(" ", "_")
         target = self.datasets_path / name
 
         if target.exists():
-            if not messagebox.askyesno("Überschreiben?", f"Dataset '{name}' existiert bereits. Überschreiben?"):
+            if not messagebox.askyesno("Überschreiben?", f"'{name}' existiert. Überschreiben?"):
                 return
             shutil.rmtree(target)
 
         try:
-            # Entpacken
             with zipfile.ZipFile(zip_path, 'r') as zf:
                 zf.extractall(target)
 
-            # Prüfe ob Unterordner
+            # Unterordner hochschieben wenn nötig
             contents = list(target.iterdir())
             if len(contents) == 1 and contents[0].is_dir():
-                # Verschiebe Inhalt nach oben
                 sub = contents[0]
                 for item in sub.iterdir():
                     shutil.move(str(item), str(target))
@@ -377,50 +719,29 @@ class YOLOStudio(ctk.CTk):
         except Exception as e:
             messagebox.showerror("Fehler", str(e))
 
-    def import_folder(self, folder_path):
-        """Importiert ein Dataset aus einem Ordner."""
-        name = folder_path.name.replace(" ", "_")
-        target = self.datasets_path / name
-
-        if target.exists():
-            if not messagebox.askyesno("Überschreiben?", f"Dataset '{name}' existiert bereits. Überschreiben?"):
-                return
-            shutil.rmtree(target)
-
-        try:
-            shutil.copytree(folder_path, target)
-            messagebox.showinfo("Erfolg", f"Dataset '{name}' importiert!")
-            self.refresh_datasets()
-            self.select_dataset(target)
-        except Exception as e:
-            messagebox.showerror("Fehler", str(e))
-
     def create_new_dataset(self):
-        """Erstellt ein neues leeres Dataset."""
+        """Erstellt ein neues Dataset."""
         name = self.new_name.get().strip().replace(" ", "_")
         classes = self.new_classes.get().strip()
 
         if not name:
-            messagebox.showerror("Fehler", "Bitte gib einen Namen ein.")
+            messagebox.showerror("Fehler", "Bitte Name eingeben.")
             return
 
         target = self.datasets_path / name
         if target.exists():
-            messagebox.showerror("Fehler", f"Dataset '{name}' existiert bereits.")
+            messagebox.showerror("Fehler", f"'{name}' existiert bereits.")
             return
 
         try:
-            # Struktur erstellen
             for split in ["train", "val"]:
                 (target / "images" / split).mkdir(parents=True)
                 (target / "labels" / split).mkdir(parents=True)
 
-            # Klassen parsen
             class_list = [c.strip() for c in classes.split(",") if c.strip()]
             if not class_list:
                 class_list = ["object"]
 
-            # data.yaml erstellen
             data = {
                 "path": str(target.absolute()),
                 "train": "images/train",
@@ -442,9 +763,9 @@ class YOLOStudio(ctk.CTk):
             messagebox.showerror("Fehler", str(e))
 
     def add_images_to_dataset(self):
-        """Fügt Bilder zum aktuellen Dataset hinzu."""
+        """Fügt Bilder zum Dataset hinzu."""
         if not self.current_dataset:
-            messagebox.showerror("Fehler", "Bitte wähle zuerst ein Dataset aus.")
+            messagebox.showerror("Fehler", "Zuerst Dataset auswählen.")
             return
 
         files = filedialog.askopenfilenames(
@@ -456,40 +777,126 @@ class YOLOStudio(ctk.CTk):
             return
 
         split = self.split_var.get()
-        target_imgs = self.current_dataset / "images" / split
-        target_labels = self.current_dataset / "labels" / split
+        target = self.current_dataset / "images" / split
+        target.mkdir(parents=True, exist_ok=True)
 
-        target_imgs.mkdir(parents=True, exist_ok=True)
-        target_labels.mkdir(parents=True, exist_ok=True)
-
-        added = 0
         for file in files:
-            file_path = Path(file)
-            # Kopiere Bild
-            shutil.copy2(file_path, target_imgs / file_path.name)
+            shutil.copy2(file, target / Path(file).name)
 
-            # Suche nach Label
-            label_path = file_path.with_suffix(".txt")
-            if label_path.exists():
-                shutil.copy2(label_path, target_labels / label_path.name)
-
-            added += 1
-
-        messagebox.showinfo("Erfolg", f"{added} Bilder zu '{split}' hinzugefügt!")
+        messagebox.showinfo("Erfolg", f"{len(files)} Bilder hinzugefügt!\n\nJetzt im 'Labeling' Tab markieren.")
         self.select_dataset(self.current_dataset)
 
-    # ==================== TAB 2: TRAINING ====================
-    def create_training_tab(self):
-        """Training Tab - Einfach und übersichtlich."""
+    # ==================== TAB 2: LABELING ====================
+    def create_labeling_tab(self):
+        """Labeling Tab."""
         main = ctk.CTkFrame(self.tab2, fg_color="transparent")
         main.pack(fill="both", expand=True, padx=15, pady=15)
 
-        # Linke Seite - Einstellungen
+        # Zentrale Box
+        center = ctk.CTkFrame(main, fg_color=BG_CARD, corner_radius=15)
+        center.pack(expand=True, pady=50)
+
+        ctk.CTkLabel(
+            center,
+            text="🏷️ Bild Labeling",
+            font=ctk.CTkFont(size=24, weight="bold")
+        ).pack(pady=(30, 10))
+
+        ctk.CTkLabel(
+            center,
+            text="Öffne das Labeling-Tool um Objekte auf\ndeinen Bildern zu markieren.",
+            text_color=TEXT_MUTED,
+            justify="center"
+        ).pack(pady=10)
+
+        # Dataset Auswahl
+        ctk.CTkLabel(center, text="Dataset:", font=ctk.CTkFont(weight="bold")).pack(pady=(20, 5))
+        self.labeling_dataset = ctk.CTkComboBox(center, values=self.get_dataset_names(), width=300)
+        self.labeling_dataset.pack(pady=5)
+
+        ctk.CTkButton(
+            center,
+            text="🔄 Aktualisieren",
+            command=self.refresh_labeling_datasets,
+            width=200
+        ).pack(pady=10)
+
+        ctk.CTkButton(
+            center,
+            text="🏷️ Labeling Tool öffnen",
+            command=self.open_labeling_tool,
+            width=300,
+            height=50,
+            fg_color=PRIMARY,
+            font=ctk.CTkFont(size=16, weight="bold")
+        ).pack(pady=30)
+
+        # Anleitung
+        help_frame = ctk.CTkFrame(center, fg_color="#1e3a5f", corner_radius=10)
+        help_frame.pack(fill="x", padx=30, pady=(0, 30))
+
+        ctk.CTkLabel(
+            help_frame,
+            text="💡 So funktioniert's:",
+            font=ctk.CTkFont(weight="bold")
+        ).pack(anchor="w", padx=15, pady=(15, 5))
+
+        ctk.CTkLabel(
+            help_frame,
+            text="1. Klasse auswählen (z.B. 'hamster')\n"
+                 "2. Auf dem Bild ziehen um Box zu zeichnen\n"
+                 "3. Labels speichern\n"
+                 "4. Nächstes Bild",
+            text_color=TEXT_MUTED,
+            justify="left"
+        ).pack(anchor="w", padx=15, pady=(0, 15))
+
+    def refresh_labeling_datasets(self):
+        """Aktualisiert Labeling Dataset-Liste."""
+        self.labeling_dataset.configure(values=self.get_dataset_names())
+
+    def open_labeling_tool(self):
+        """Öffnet das Labeling-Fenster."""
+        dataset_name = self.labeling_dataset.get()
+        if not dataset_name:
+            messagebox.showerror("Fehler", "Bitte Dataset auswählen.")
+            return
+
+        dataset_path = self.datasets_path / dataset_name
+        if not dataset_path.exists():
+            messagebox.showerror("Fehler", f"Dataset '{dataset_name}' nicht gefunden.")
+            return
+
+        # Klassen laden
+        yaml_path = dataset_path / "data.yaml"
+        if not yaml_path.exists():
+            messagebox.showerror("Fehler", "data.yaml nicht gefunden.")
+            return
+
+        with open(yaml_path) as f:
+            data = yaml.safe_load(f)
+
+        names = data.get("names", {})
+        if isinstance(names, dict):
+            class_names = list(names.values())
+        else:
+            class_names = names
+
+        # Labeling-Fenster öffnen
+        LabelingWindow(self, dataset_path, class_names)
+
+    # ==================== TAB 3: TRAINING ====================
+    def create_training_tab(self):
+        """Training Tab mit Python API."""
+        main = ctk.CTkFrame(self.tab3, fg_color="transparent")
+        main.pack(fill="both", expand=True, padx=15, pady=15)
+
+        # Linke Seite
         left = ctk.CTkFrame(main, fg_color=BG_CARD, corner_radius=15, width=450)
         left.pack(side="left", fill="y", padx=(0, 15))
         left.pack_propagate(False)
 
-        # Header mit Start-Button
+        # Header
         header = ctk.CTkFrame(left, fg_color="transparent")
         header.pack(fill="x", padx=20, pady=20)
 
@@ -517,17 +924,12 @@ class YOLOStudio(ctk.CTk):
         )
         self.stop_btn.pack(side="right", padx=10)
 
-        # Dataset Auswahl
+        # Dataset
         ctk.CTkLabel(left, text="📁 Dataset:", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=20, pady=(10, 5))
         self.train_dataset = ctk.CTkComboBox(left, values=self.get_dataset_names(), width=380)
         self.train_dataset.pack(anchor="w", padx=20)
 
-        ctk.CTkButton(
-            left,
-            text="🔄 Liste aktualisieren",
-            command=self.refresh_training_datasets,
-            width=200
-        ).pack(anchor="w", padx=20, pady=10)
+        ctk.CTkButton(left, text="🔄 Aktualisieren", command=self.refresh_training_datasets, width=200).pack(anchor="w", padx=20, pady=10)
 
         # Parameter
         ctk.CTkLabel(left, text="⚙️ Einstellungen:", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=20, pady=(20, 10))
@@ -535,48 +937,36 @@ class YOLOStudio(ctk.CTk):
         params = ctk.CTkFrame(left, fg_color="transparent")
         params.pack(fill="x", padx=20)
 
-        # Epochs
         ctk.CTkLabel(params, text="Epochen:", width=100, anchor="w").grid(row=0, column=0, pady=8)
-        self.epochs_entry = ctk.CTkEntry(params, width=100, placeholder_text="100")
+        self.epochs_entry = ctk.CTkEntry(params, width=100)
         self.epochs_entry.insert(0, "100")
         self.epochs_entry.grid(row=0, column=1, pady=8)
-        ctk.CTkLabel(params, text="(Mehr = genauer, länger)", text_color=TEXT_MUTED).grid(row=0, column=2, padx=10)
 
-        # Batch
         ctk.CTkLabel(params, text="Batch:", width=100, anchor="w").grid(row=1, column=0, pady=8)
-        self.batch_entry = ctk.CTkEntry(params, width=100, placeholder_text="16")
-        self.batch_entry.insert(0, "16")
+        self.batch_entry = ctk.CTkEntry(params, width=100)
+        self.batch_entry.insert(0, "8")
         self.batch_entry.grid(row=1, column=1, pady=8)
-        ctk.CTkLabel(params, text="(Kleiner bei wenig GPU RAM)", text_color=TEXT_MUTED).grid(row=1, column=2, padx=10)
 
-        # Image Size
         ctk.CTkLabel(params, text="Bildgröße:", width=100, anchor="w").grid(row=2, column=0, pady=8)
-        self.imgsz_entry = ctk.CTkEntry(params, width=100, placeholder_text="640")
+        self.imgsz_entry = ctk.CTkEntry(params, width=100)
         self.imgsz_entry.insert(0, "640")
         self.imgsz_entry.grid(row=2, column=1, pady=8)
-        ctk.CTkLabel(params, text="(640 ist Standard)", text_color=TEXT_MUTED).grid(row=2, column=2, padx=10)
 
-        # Info-Box
+        # Info
         info = ctk.CTkFrame(left, fg_color="#1e3a5f", corner_radius=10)
         info.pack(fill="x", padx=20, pady=20)
 
+        ctk.CTkLabel(info, text="💡 Training Info:", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=15, pady=(15, 5))
         ctk.CTkLabel(
             info,
-            text="💡 Was passiert beim Training?",
-            font=ctk.CTkFont(weight="bold")
-        ).pack(anchor="w", padx=15, pady=(15, 5))
-
-        ctk.CTkLabel(
-            info,
-            text="Das Modell lernt, deine Objekte zu erkennen.\n"
-                 "Je mehr Bilder und Epochen, desto besser.\n\n"
-                 "Nach dem Training findest du dein Modell unter:\n"
+            text="Verwendet YOLO11m für beste Ergebnisse.\n"
+                 "Modell wird gespeichert in:\n"
                  "modelle/[dataset]/weights/best.pt",
             text_color=TEXT_MUTED,
             justify="left"
         ).pack(anchor="w", padx=15, pady=(0, 15))
 
-        # Rechte Seite - Logs
+        # Rechte Seite - Log
         right = ctk.CTkFrame(main, fg_color=BG_CARD, corner_radius=15)
         right.pack(side="right", fill="both", expand=True)
 
@@ -602,7 +992,7 @@ class YOLOStudio(ctk.CTk):
         self.progress_label.pack(side="left", padx=15)
 
     def get_dataset_names(self):
-        """Gibt Liste der Dataset-Namen zurück."""
+        """Gibt Dataset-Namen zurück."""
         names = []
         if self.datasets_path.exists():
             for d in self.datasets_path.iterdir():
@@ -611,138 +1001,155 @@ class YOLOStudio(ctk.CTk):
         return sorted(names)
 
     def refresh_training_datasets(self):
-        """Aktualisiert die Dataset-Dropdown."""
+        """Aktualisiert Training-Datasets."""
         self.train_dataset.configure(values=self.get_dataset_names())
 
     def start_training(self):
-        """Startet das Training."""
+        """Startet Training mit Python API."""
         dataset = self.train_dataset.get()
         if not dataset:
-            messagebox.showerror("Fehler", "Bitte wähle ein Dataset aus.")
+            messagebox.showerror("Fehler", "Bitte Dataset auswählen.")
             return
 
         data_yaml = self.datasets_path / dataset / "data.yaml"
         if not data_yaml.exists():
-            messagebox.showerror("Fehler", f"data.yaml nicht gefunden in {dataset}")
+            messagebox.showerror("Fehler", "data.yaml nicht gefunden.")
             return
 
-        # Parameter
         try:
             epochs = int(self.epochs_entry.get())
             batch = int(self.batch_entry.get())
             imgsz = int(self.imgsz_entry.get())
         except ValueError:
-            messagebox.showerror("Fehler", "Bitte gib gültige Zahlen für die Parameter ein.")
+            messagebox.showerror("Fehler", "Ungültige Parameter.")
             return
 
         self.is_training = True
+        self.stop_training_flag = False
         self.start_btn.configure(state="disabled")
         self.stop_btn.configure(state="normal")
         self.status_label.configure(text="🟢 Training läuft...", text_color=SUCCESS)
         self.log_text.delete("1.0", "end")
         self.progress.set(0)
 
-        # Log starten
         self.log_text.insert("end", "=" * 50 + "\n")
         self.log_text.insert("end", f"🚀 Training gestartet!\n")
         self.log_text.insert("end", f"📁 Dataset: {dataset}\n")
         self.log_text.insert("end", f"📊 Epochen: {epochs} | Batch: {batch} | Größe: {imgsz}\n")
-        self.log_text.insert("end", f"🤖 Modell: YOLO11m (beste Balance)\n")
         self.log_text.insert("end", "=" * 50 + "\n\n")
 
-        # Kommando - NUR YOLO11m (beste Balance)
-        cmd = [
-            sys.executable, "-m", "ultralytics",
-            "detect", "train",
-            f"data={data_yaml}",
-            "model=yolo11m.pt",  # Immer das beste Modell
-            f"epochs={epochs}",
-            f"batch={batch}",
-            f"imgsz={imgsz}",
-            f"project={self.modelle_path}",
-            f"name={dataset}",
-            "exist_ok=True",
-            "patience=50",  # Early stopping
-            "save=True",
-            "plots=True"
-        ]
-
-        def run():
+        # Training in Thread
+        def train():
             try:
-                self.training_process = subprocess.Popen(
-                    cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    bufsize=1
+                self.after(0, lambda: self.log_text.insert("end", "⏳ Lade YOLO...\n"))
+
+                from ultralytics import YOLO
+
+                self.after(0, lambda: self.log_text.insert("end", "✅ YOLO geladen!\n"))
+                self.after(0, lambda: self.log_text.insert("end", f"🤖 Verwende: yolo11m.pt\n\n"))
+
+                # Modell laden
+                model = YOLO("yolo11m.pt")
+
+                # Projekt-Pfad
+                project_path = str(self.modelle_path)
+
+                self.after(0, lambda: self.log_text.insert("end", "🏋️ Starte Training...\n\n"))
+
+                # Training starten
+                results = model.train(
+                    data=str(data_yaml),
+                    epochs=epochs,
+                    batch=batch,
+                    imgsz=imgsz,
+                    project=project_path,
+                    name=dataset,
+                    exist_ok=True,
+                    patience=50,
+                    save=True,
+                    plots=True,
+                    verbose=True
                 )
 
-                for line in self.training_process.stdout:
-                    self.after(0, lambda l=line: self.log_text.insert("end", l))
-                    self.after(0, lambda: self.log_text.see("end"))
+                # Erfolg
+                model_path = self.modelle_path / dataset / "weights" / "best.pt"
 
-                    # Progress parsen
-                    if "Epoch" in line:
-                        try:
-                            # Format: "Epoch 1/100"
-                            parts = line.split()
-                            for p in parts:
-                                if "/" in p and p[0].isdigit():
-                                    current, total = map(int, p.split("/"))
-                                    progress = current / total
-                                    self.after(0, lambda p=progress: self.progress.set(p))
-                                    self.after(0, lambda p=progress: self.progress_label.configure(text=f"{int(p*100)}%"))
-                                    break
-                        except:
-                            pass
-
-                self.training_process.wait()
-                self.after(0, self.training_done)
+                self.after(0, lambda: self.training_success(str(model_path)))
 
             except Exception as e:
-                self.after(0, lambda: self.log_text.insert("end", f"\n❌ Fehler: {e}\n"))
-                self.after(0, self.training_done)
+                error_msg = str(e)
+                self.after(0, lambda: self.training_error(error_msg))
 
-        threading.Thread(target=run, daemon=True).start()
+        self.training_thread = threading.Thread(target=train, daemon=True)
+        self.training_thread.start()
 
-    def stop_training(self):
-        """Stoppt das Training."""
-        if self.training_process:
-            self.training_process.terminate()
-            self.log_text.insert("end", "\n⏹️ Training gestoppt!\n")
+        # Progress-Update
+        self.update_training_progress()
 
-    def training_done(self):
-        """Wird aufgerufen wenn Training fertig."""
+    def update_training_progress(self):
+        """Aktualisiert Progress während Training."""
+        if self.is_training:
+            # Scroll Log nach unten
+            self.log_text.see("end")
+            self.after(1000, self.update_training_progress)
+
+    def training_success(self, model_path):
+        """Wird bei erfolgreichem Training aufgerufen."""
         self.is_training = False
         self.start_btn.configure(state="normal")
         self.stop_btn.configure(state="disabled")
-        self.status_label.configure(text="✅ Fertig!", text_color=SUCCESS)
-        self.progress.set(1)
-        self.progress_label.configure(text="100%")
 
-        self.log_text.insert("end", "\n" + "=" * 50 + "\n")
-        self.log_text.insert("end", "✅ Training abgeschlossen!\n")
-        self.log_text.insert("end", f"📁 Dein Modell: modelle/{self.train_dataset.get()}/weights/best.pt\n")
-        self.log_text.insert("end", "=" * 50 + "\n")
+        if Path(model_path).exists():
+            self.status_label.configure(text="✅ Erfolgreich!", text_color=SUCCESS)
+            self.progress.set(1)
+            self.progress_label.configure(text="100%")
 
-        # Model Liste aktualisieren
+            self.log_text.insert("end", "\n" + "=" * 50 + "\n")
+            self.log_text.insert("end", "✅ Training erfolgreich abgeschlossen!\n")
+            self.log_text.insert("end", f"📁 Modell gespeichert: {model_path}\n")
+            self.log_text.insert("end", "=" * 50 + "\n")
+
+            messagebox.showinfo("Erfolg", f"Training abgeschlossen!\n\nModell: {model_path}")
+        else:
+            self.training_error("Modell wurde nicht erstellt.")
+
         self.refresh_models()
 
-    # ==================== TAB 3: TESTEN ====================
+    def training_error(self, error):
+        """Wird bei Training-Fehler aufgerufen."""
+        self.is_training = False
+        self.start_btn.configure(state="normal")
+        self.stop_btn.configure(state="disabled")
+        self.status_label.configure(text="❌ Fehler!", text_color=DANGER)
+
+        self.log_text.insert("end", "\n" + "=" * 50 + "\n")
+        self.log_text.insert("end", f"❌ FEHLER: {error}\n")
+        self.log_text.insert("end", "=" * 50 + "\n")
+
+        messagebox.showerror("Training Fehler", f"Training fehlgeschlagen:\n\n{error}")
+
+    def stop_training(self):
+        """Stoppt Training."""
+        self.stop_training_flag = True
+        self.is_training = False
+        self.status_label.configure(text="⏹️ Gestoppt", text_color=WARNING)
+        self.log_text.insert("end", "\n⏹️ Training wird gestoppt...\n")
+
+    # ==================== TAB 4: TESTEN ====================
     def create_testing_tab(self):
-        """Test Tab - Trainiertes Modell testen."""
-        main = ctk.CTkFrame(self.tab3, fg_color="transparent")
+        """Test Tab."""
+        main = ctk.CTkFrame(self.tab4, fg_color="transparent")
         main.pack(fill="both", expand=True, padx=15, pady=15)
 
-        # Linke Seite - Einstellungen
+        # Linke Seite
         left = ctk.CTkFrame(main, fg_color=BG_CARD, corner_radius=15, width=400)
         left.pack(side="left", fill="y", padx=(0, 15))
         left.pack_propagate(False)
 
         ctk.CTkLabel(left, text="🔍 Modell testen", font=ctk.CTkFont(size=22, weight="bold")).pack(pady=20)
 
-        # Modell Auswahl
-        ctk.CTkLabel(left, text="🤖 Dein trainiertes Modell:", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=20, pady=(10, 5))
+        # Modell
+        ctk.CTkLabel(left, text="🤖 Trainiertes Modell:", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=20, pady=(10, 5))
 
         self.model_combo = ctk.CTkComboBox(left, values=[], width=340)
         self.model_combo.pack(anchor="w", padx=20)
@@ -800,51 +1207,46 @@ class YOLOStudio(ctk.CTk):
 
         self.image_label = ctk.CTkLabel(
             right,
-            text="🖼️\n\nWähle ein Bild aus\nund klicke 'Erkennung starten'",
+            text="🖼️\n\nWähle ein Bild und\nstarte die Erkennung",
             font=ctk.CTkFont(size=18),
             text_color=TEXT_MUTED
         )
         self.image_label.pack(fill="both", expand=True, padx=30, pady=30)
 
-        # Modelle laden
         self.refresh_models()
 
     def refresh_models(self):
-        """Aktualisiert die Liste der trainierten Modelle."""
+        """Aktualisiert Modell-Liste."""
         models = []
 
-        # Suche trainierte Modelle im modelle/ Ordner
         if self.modelle_path.exists():
             for best_pt in self.modelle_path.glob("**/weights/best.pt"):
-                # Relativer Pfad
-                rel = best_pt.relative_to(self.modelle_path)
-                models.append(str(self.modelle_path / rel))
+                models.append(str(best_pt))
 
         if models:
             self.model_combo.configure(values=models)
-            self.model_combo.set(models[0])  # Erstes Modell auswählen
+            self.model_combo.set(models[0])
         else:
-            self.model_combo.configure(values=["Noch keine trainierten Modelle"])
-            self.model_combo.set("Noch keine trainierten Modelle")
+            self.model_combo.configure(values=["Noch keine Modelle"])
+            self.model_combo.set("Noch keine Modelle")
 
     def browse_model(self):
-        """Lädt ein Modell von der Festplatte."""
+        """Lädt Modell von Festplatte."""
         file = filedialog.askopenfilename(
             title="Modell auswählen",
-            filetypes=[("PyTorch", "*.pt"), ("Alle", "*.*")]
+            filetypes=[("PyTorch", "*.pt")]
         )
         if file:
             self.model_combo.set(file)
 
     def select_image(self):
-        """Wählt ein Testbild aus."""
+        """Wählt Testbild."""
         file = filedialog.askopenfilename(
             title="Bild auswählen",
             filetypes=[("Bilder", "*.jpg *.jpeg *.png *.bmp *.webp")]
         )
         if file:
             self.test_image_path = file
-            # Bild anzeigen
             img = Image.open(file)
             img.thumbnail((900, 700))
             photo = ctk.CTkImage(img, size=img.size)
@@ -852,14 +1254,14 @@ class YOLOStudio(ctk.CTk):
             self.image_label.image = photo
 
     def run_detection(self):
-        """Führt die Erkennung aus."""
+        """Führt Erkennung aus."""
         if not self.test_image_path:
-            messagebox.showerror("Fehler", "Bitte wähle zuerst ein Bild aus.")
+            messagebox.showerror("Fehler", "Bitte Bild auswählen.")
             return
 
         model_path = self.model_combo.get()
         if not model_path or "Noch keine" in model_path:
-            messagebox.showerror("Fehler", "Bitte wähle ein trainiertes Modell aus.\n\nWenn du noch keins hast, trainiere zuerst im Tab '2️⃣ Training'!")
+            messagebox.showerror("Fehler", "Bitte trainiertes Modell auswählen.")
             return
 
         if not Path(model_path).exists():
@@ -875,7 +1277,7 @@ class YOLOStudio(ctk.CTk):
 
             model = YOLO(model_path)
 
-            self.results_box.insert("end", "🔍 Erkenne Objekte...\n")
+            self.results_box.insert("end", "🔍 Erkenne...\n")
             self.update()
 
             results = model.predict(
@@ -886,7 +1288,7 @@ class YOLOStudio(ctk.CTk):
 
             result = results[0]
 
-            # Bild mit Erkennungen anzeigen
+            # Bild mit Boxen
             annotated = result.plot()
             img = Image.fromarray(annotated[..., ::-1])
             img.thumbnail((900, 700))
@@ -898,20 +1300,17 @@ class YOLOStudio(ctk.CTk):
             self.results_box.delete("1.0", "end")
 
             if result.boxes is not None and len(result.boxes) > 0:
-                self.results_box.insert("end", f"✅ {len(result.boxes)} Objekte gefunden:\n")
-                self.results_box.insert("end", "-" * 30 + "\n")
+                self.results_box.insert("end", f"✅ {len(result.boxes)} gefunden:\n")
+                self.results_box.insert("end", "-" * 25 + "\n")
 
                 for box in result.boxes:
                     cls_id = int(box.cls[0])
                     cls_name = result.names[cls_id]
                     conf = float(box.conf[0])
-                    self.results_box.insert("end", f"  • {cls_name}: {conf:.1%}\n")
+                    self.results_box.insert("end", f"• {cls_name}: {conf:.1%}\n")
             else:
-                self.results_box.insert("end", "❌ Keine Objekte gefunden.\n\n")
-                self.results_box.insert("end", "Tipps:\n")
-                self.results_box.insert("end", "• Confidence senken\n")
-                self.results_box.insert("end", "• Mehr Training-Epochen\n")
-                self.results_box.insert("end", "• Mehr Trainingsbilder\n")
+                self.results_box.insert("end", "❌ Nichts gefunden.\n\n")
+                self.results_box.insert("end", "Tipps:\n• Confidence senken\n• Mehr trainieren")
 
         except Exception as e:
             messagebox.showerror("Fehler", str(e))
