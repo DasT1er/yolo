@@ -47,7 +47,7 @@ yolo/
 ├── start.sh            # Linux/Mac starter
 ├── requirements.txt    # Dependencies
 ├── datasets/           # Your datasets
-├── runs/               # Training outputs
+├── modelle/            # Trained models (auto-detected)
 └── exports/            # Exported models
 ```
 

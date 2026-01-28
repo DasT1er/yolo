@@ -47,10 +47,10 @@ class YOLOStudio(ctk.CTk):
         # Pfade
         self.base_path = Path(__file__).parent
         self.datasets_path = self.base_path / "datasets"
-        self.runs_path = self.base_path / "runs"
+        self.modelle_path = self.base_path / "modelle"
 
         self.datasets_path.mkdir(exist_ok=True)
-        self.runs_path.mkdir(exist_ok=True)
+        self.modelle_path.mkdir(exist_ok=True)
 
         # Status
         self.training_process = None
@@ -571,7 +571,7 @@ class YOLOStudio(ctk.CTk):
             text="Das Modell lernt, deine Objekte zu erkennen.\n"
                  "Je mehr Bilder und Epochen, desto besser.\n\n"
                  "Nach dem Training findest du dein Modell unter:\n"
-                 "runs/[dataset]/weights/best.pt",
+                 "modelle/[dataset]/weights/best.pt",
             text_color=TEXT_MUTED,
             justify="left"
         ).pack(anchor="w", padx=15, pady=(0, 15))
@@ -659,7 +659,7 @@ class YOLOStudio(ctk.CTk):
             f"epochs={epochs}",
             f"batch={batch}",
             f"imgsz={imgsz}",
-            f"project={self.runs_path}",
+            f"project={self.modelle_path}",
             f"name={dataset}",
             "exist_ok=True",
             "patience=50",  # Early stopping
@@ -722,7 +722,7 @@ class YOLOStudio(ctk.CTk):
 
         self.log_text.insert("end", "\n" + "=" * 50 + "\n")
         self.log_text.insert("end", "✅ Training abgeschlossen!\n")
-        self.log_text.insert("end", f"📁 Dein Modell: runs/{self.train_dataset.get()}/weights/best.pt\n")
+        self.log_text.insert("end", f"📁 Dein Modell: modelle/{self.train_dataset.get()}/weights/best.pt\n")
         self.log_text.insert("end", "=" * 50 + "\n")
 
         # Model Liste aktualisieren
@@ -813,12 +813,12 @@ class YOLOStudio(ctk.CTk):
         """Aktualisiert die Liste der trainierten Modelle."""
         models = []
 
-        # Suche trainierte Modelle
-        if self.runs_path.exists():
-            for best_pt in self.runs_path.glob("**/weights/best.pt"):
+        # Suche trainierte Modelle im modelle/ Ordner
+        if self.modelle_path.exists():
+            for best_pt in self.modelle_path.glob("**/weights/best.pt"):
                 # Relativer Pfad
-                rel = best_pt.relative_to(self.runs_path)
-                models.append(str(self.runs_path / rel))
+                rel = best_pt.relative_to(self.modelle_path)
+                models.append(str(self.modelle_path / rel))
 
         if models:
             self.model_combo.configure(values=models)
