@@ -32,6 +32,101 @@ BG_CARD = "#2d2d3d"
 TEXT_MUTED = "#94a3b8"
 
 
+def get_dataset_paths(dataset_path):
+    """
+    Erkennt das Dataset-Format und gibt die Pfade zurück.
+    Unterstützt:
+    - Standard YOLO: images/train, images/val, labels/train, labels/val
+    - Roboflow: train/, valid/ oder val/, test/ (Bilder und Labels gemischt)
+    """
+    dataset_path = Path(dataset_path)
+
+    # Mögliche Ordnernamen für Training und Validierung
+    train_names = ["train", "training"]
+    val_names = ["val", "valid", "validation"]
+
+    result = {
+        "train_images": None,
+        "val_images": None,
+        "train_labels": None,
+        "val_labels": None,
+        "format": "unknown"
+    }
+
+    # Check Standard YOLO Format: images/train, labels/train
+    if (dataset_path / "images" / "train").exists():
+        result["train_images"] = dataset_path / "images" / "train"
+        result["train_labels"] = dataset_path / "labels" / "train"
+        result["format"] = "standard"
+
+        # Val folder
+        for val_name in val_names:
+            if (dataset_path / "images" / val_name).exists():
+                result["val_images"] = dataset_path / "images" / val_name
+                result["val_labels"] = dataset_path / "labels" / val_name
+                break
+        return result
+
+    # Check Roboflow Format: train/, valid/ mit Bildern direkt drin
+    for train_name in train_names:
+        train_dir = dataset_path / train_name
+        if train_dir.exists():
+            # Prüfe ob Bilder direkt im Ordner sind
+            has_images = any(train_dir.glob("*.jpg")) or any(train_dir.glob("*.png"))
+            # Oder in images/ Unterordner
+            has_images_subdir = (train_dir / "images").exists()
+
+            if has_images:
+                # Roboflow Format: Bilder direkt in train/, Labels auch
+                result["train_images"] = train_dir
+                result["train_labels"] = train_dir  # Labels sind im gleichen Ordner
+                result["format"] = "roboflow"
+            elif has_images_subdir:
+                result["train_images"] = train_dir / "images"
+                result["train_labels"] = train_dir / "labels"
+                result["format"] = "roboflow_nested"
+
+            # Val folder suchen
+            for val_name in val_names:
+                val_dir = dataset_path / val_name
+                if val_dir.exists():
+                    if (val_dir / "images").exists():
+                        result["val_images"] = val_dir / "images"
+                        result["val_labels"] = val_dir / "labels"
+                    else:
+                        result["val_images"] = val_dir
+                        result["val_labels"] = val_dir
+                    break
+
+            return result
+
+    return result
+
+
+def count_images(folder):
+    """Zählt Bilder in einem Ordner."""
+    if not folder or not folder.exists():
+        return 0
+    count = 0
+    for ext in ["*.jpg", "*.jpeg", "*.png", "*.bmp", "*.webp"]:
+        count += len(list(folder.glob(ext)))
+    return count
+
+
+def count_labels(folder):
+    """Zählt Label-Dateien in einem Ordner (ignoriert README etc.)."""
+    if not folder or not folder.exists():
+        return 0
+    count = 0
+    for txt_file in folder.glob("*.txt"):
+        # Ignoriere README und andere Nicht-Label-Dateien
+        name_lower = txt_file.stem.lower()
+        if name_lower.startswith("readme") or name_lower.startswith("_"):
+            continue
+        count += 1
+    return count
+
+
 class LabelingWindow(ctk.CTkToplevel):
     """Fenster zum Labeln von Bildern mit Bounding Boxes."""
 
@@ -68,13 +163,17 @@ class LabelingWindow(ctk.CTkToplevel):
             self.load_image(0)
 
     def load_image_list(self):
-        """Lädt alle Bilder aus dem Dataset."""
-        for split in ["train", "val"]:
-            img_dir = self.dataset_path / "images" / split
-            if img_dir.exists():
+        """Lädt alle Bilder aus dem Dataset (unterstützt beide Formate)."""
+        paths = get_dataset_paths(self.dataset_path)
+
+        # Bilder aus train und val laden
+        for img_dir in [paths["train_images"], paths["val_images"]]:
+            if img_dir and img_dir.exists():
                 for ext in ["*.jpg", "*.jpeg", "*.png", "*.bmp", "*.webp"]:
                     self.image_list.extend(list(img_dir.glob(ext)))
+
         self.image_list = sorted(self.image_list)
+        self.dataset_format = paths["format"]
 
     def create_ui(self):
         """Erstellt die UI."""
@@ -249,11 +348,23 @@ class LabelingWindow(ctk.CTkToplevel):
                         self.boxes.append((x1, y1, x2, y2, cls_id))
 
     def get_label_path(self):
-        """Gibt den Pfad zur Label-Datei zurück."""
-        # images/train/img.jpg -> labels/train/img.txt
-        rel_path = self.current_image_path.relative_to(self.dataset_path / "images")
-        label_path = self.dataset_path / "labels" / rel_path.with_suffix(".txt")
-        return label_path
+        """Gibt den Pfad zur Label-Datei zurück (unterstützt beide Formate)."""
+        if not self.current_image_path:
+            return None
+
+        # Roboflow Format: Label ist im gleichen Ordner wie Bild
+        if hasattr(self, 'dataset_format') and self.dataset_format in ["roboflow", "roboflow_nested"]:
+            # Label im gleichen Ordner wie Bild
+            return self.current_image_path.with_suffix(".txt")
+
+        # Standard YOLO Format: images/train/img.jpg -> labels/train/img.txt
+        try:
+            rel_path = self.current_image_path.relative_to(self.dataset_path / "images")
+            label_path = self.dataset_path / "labels" / rel_path.with_suffix(".txt")
+            return label_path
+        except ValueError:
+            # Fallback: Label im gleichen Ordner
+            return self.current_image_path.with_suffix(".txt")
 
     def display_image(self):
         """Zeigt das Bild auf dem Canvas an."""
@@ -628,8 +739,9 @@ class YOLOStudio(ctk.CTk):
 
     def create_dataset_button(self, path):
         """Erstellt einen Button für ein Dataset."""
-        train_count = len(list((path / "images" / "train").glob("*"))) if (path / "images" / "train").exists() else 0
-        val_count = len(list((path / "images" / "val").glob("*"))) if (path / "images" / "val").exists() else 0
+        paths = get_dataset_paths(path)
+        train_count = count_images(paths["train_images"])
+        val_count = count_images(paths["val_images"])
 
         btn = ctk.CTkButton(
             self.dataset_list,
@@ -663,14 +775,17 @@ class YOLOStudio(ctk.CTk):
             for i, cls in enumerate(classes[:10]):
                 info_text += f"   {i}: {cls}\n"
 
-        train_imgs = len(list((path / "images" / "train").glob("*"))) if (path / "images" / "train").exists() else 0
-        val_imgs = len(list((path / "images" / "val").glob("*"))) if (path / "images" / "val").exists() else 0
-        train_labels = len(list((path / "labels" / "train").glob("*.txt"))) if (path / "labels" / "train").exists() else 0
-        val_labels = len(list((path / "labels" / "val").glob("*.txt"))) if (path / "labels" / "val").exists() else 0
+        # Dataset-Pfade ermitteln (unterstützt beide Formate)
+        paths = get_dataset_paths(path)
+        train_imgs = count_images(paths["train_images"])
+        val_imgs = count_images(paths["val_images"])
+        train_labels = count_labels(paths["train_labels"])
+        val_labels = count_labels(paths["val_labels"])
 
         info_text += f"\n📊 Statistiken:\n"
         info_text += f"   Training: {train_imgs} Bilder, {train_labels} Labels\n"
         info_text += f"   Validierung: {val_imgs} Bilder, {val_labels} Labels\n"
+        info_text += f"\n📂 Format: {paths['format']}"
 
         if train_labels < train_imgs:
             info_text += f"\n⚠️ {train_imgs - train_labels} Bilder noch nicht gelabelt!"
