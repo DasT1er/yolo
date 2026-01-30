@@ -1047,14 +1047,33 @@ class YOLOStudio(ctk.CTk):
             width=300,
             height=40,
             fg_color=DANGER
-        ).pack(pady=10)
+        ).pack(pady=(10, 5))
+
+        # Label-Klasse löschen
+        del_cls_frame = ctk.CTkFrame(right, fg_color="transparent")
+        del_cls_frame.pack(fill="x", padx=30, pady=5)
+
+        self.delete_class_entry = ctk.CTkEntry(
+            del_cls_frame,
+            placeholder_text="Klassen-ID (z.B. 0, 1, 2)",
+            width=170
+        )
+        self.delete_class_entry.pack(side="left", padx=(0, 5))
+
+        ctk.CTkButton(
+            del_cls_frame,
+            text="🏷️ Klasse löschen",
+            command=self.delete_class_labels,
+            width=130,
+            fg_color=DANGER
+        ).pack(side="left")
 
         ctk.CTkLabel(
             right,
-            text="Löscht alle Bilder die kein Label haben.\nYOLO nutzt beim Training nur gelabelte Bilder.",
+            text="Entfernt eine Klasse aus allen Label-Dateien\noder löscht Bilder ohne Labels.",
             text_color=TEXT_MUTED,
             justify="center"
-        ).pack(pady=(0, 20))
+        ).pack(pady=(5, 20))
 
         self.refresh_auto_label_models()
 
@@ -1250,6 +1269,91 @@ class YOLOStudio(ctk.CTk):
                 img_path.unlink()
             messagebox.showinfo("Erfolg", f"{len(unlabeled)} Bilder gelöscht!")
             self.refresh_datasets()
+
+    def delete_class_labels(self):
+        """Löscht alle Labels einer bestimmten Klasse aus dem Dataset."""
+        dataset_name = self.auto_label_dataset.get()
+        if not dataset_name:
+            dataset_name = self.labeling_dataset.get()
+
+        if not dataset_name:
+            messagebox.showerror("Fehler", "Bitte Dataset auswählen.")
+            return
+
+        cls_text = self.delete_class_entry.get().strip()
+        if not cls_text:
+            messagebox.showerror("Fehler", "Bitte Klassen-ID eingeben (z.B. 0, 1, 2).")
+            return
+
+        try:
+            cls_id = int(cls_text)
+        except ValueError:
+            messagebox.showerror("Fehler", "Klassen-ID muss eine Zahl sein.")
+            return
+
+        dataset_path = self.datasets_path / dataset_name
+        paths = get_dataset_paths(dataset_path)
+
+        # Klassen-Name ermitteln
+        cls_name = str(cls_id)
+        yaml_path = dataset_path / "data.yaml"
+        if yaml_path.exists():
+            with open(yaml_path) as f:
+                data = yaml.safe_load(f)
+            names = data.get("names", {})
+            if isinstance(names, dict) and cls_id in names:
+                cls_name = names[cls_id]
+            elif isinstance(names, list) and cls_id < len(names):
+                cls_name = names[cls_id]
+
+        # Label-Ordner finden
+        label_dirs = []
+        for lbl_dir in [paths["train_labels"], paths["val_labels"]]:
+            if lbl_dir and lbl_dir.exists():
+                label_dirs.append(lbl_dir)
+
+        if not label_dirs:
+            messagebox.showerror("Fehler", "Keine Label-Ordner gefunden.")
+            return
+
+        # Zählen
+        affected_files = 0
+        removed_lines = 0
+        for lbl_dir in label_dirs:
+            for txt_file in lbl_dir.glob("*.txt"):
+                if txt_file.stem.lower().startswith("readme"):
+                    continue
+                with open(txt_file) as f:
+                    lines = f.readlines()
+                new_lines = [l for l in lines if l.strip() and not l.strip().startswith(f"{cls_id} ")]
+                if len(new_lines) < len(lines):
+                    affected_files += 1
+                    removed_lines += len(lines) - len(new_lines)
+
+        if removed_lines == 0:
+            messagebox.showinfo("Info", f"Klasse {cls_id} ('{cls_name}') nicht gefunden.")
+            return
+
+        if not messagebox.askyesno(
+            "Klasse löschen?",
+            f"Klasse {cls_id} ('{cls_name}') löschen?\n\n"
+            f"{removed_lines} Labels in {affected_files} Dateien werden entfernt."
+        ):
+            return
+
+        # Löschen
+        for lbl_dir in label_dirs:
+            for txt_file in lbl_dir.glob("*.txt"):
+                if txt_file.stem.lower().startswith("readme"):
+                    continue
+                with open(txt_file) as f:
+                    lines = f.readlines()
+                new_lines = [l for l in lines if l.strip() and not l.strip().startswith(f"{cls_id} ")]
+                with open(txt_file, 'w') as f:
+                    f.writelines(new_lines)
+
+        messagebox.showinfo("Erfolg", f"Klasse {cls_id} ('{cls_name}') gelöscht!\n{removed_lines} Labels entfernt.")
+        self.refresh_datasets()
 
     # ==================== TAB 3: TRAINING ====================
     def create_training_tab(self):
