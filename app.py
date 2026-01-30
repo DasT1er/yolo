@@ -996,6 +996,7 @@ class YOLOStudio(ctk.CTk):
         ctk.CTkLabel(left, text="Dataset:", font=ctk.CTkFont(weight="bold")).pack(pady=(15, 5))
         self.labeling_dataset = ctk.CTkComboBox(left, values=self.get_dataset_names(), width=300)
         self.labeling_dataset.pack(pady=5)
+        self.labeling_dataset.set("")
 
         ctk.CTkButton(
             left,
@@ -1055,6 +1056,9 @@ class YOLOStudio(ctk.CTk):
         ctk.CTkLabel(right, text="Dataset:", font=ctk.CTkFont(weight="bold")).pack(pady=(15, 5))
         self.auto_label_dataset = ctk.CTkComboBox(right, values=self.get_dataset_names(), width=300)
         self.auto_label_dataset.pack(pady=5)
+        self.auto_label_dataset.set("")
+
+        ctk.CTkButton(right, text="🔄 Aktualisieren", command=self.refresh_labeling_datasets, width=200).pack(pady=5)
 
         # Modell
         ctk.CTkLabel(right, text="Modell (.pt):", font=ctk.CTkFont(weight="bold")).pack(pady=(10, 5))
@@ -1139,7 +1143,9 @@ class YOLOStudio(ctk.CTk):
 
     def refresh_labeling_datasets(self):
         """Aktualisiert Labeling Dataset-Liste."""
-        self.labeling_dataset.configure(values=self.get_dataset_names())
+        names = self.get_dataset_names()
+        self.labeling_dataset.configure(values=names)
+        self.auto_label_dataset.configure(values=names)
 
     def open_labeling_tool(self):
         """Öffnet das Labeling-Fenster."""
