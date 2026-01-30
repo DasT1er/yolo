@@ -31,6 +31,14 @@ WARNING = "#f59e0b"
 BG_CARD = "#2d2d3d"
 TEXT_MUTED = "#94a3b8"
 
+# YOLO Modelle mit Beschreibung
+YOLO_MODELS = {
+    "YOLOv8m": {"file": "yolov8m.pt", "desc": "Stabil, gut getestet"},
+    "YOLOv10m": {"file": "yolov10m.pt", "desc": "Schneller, NMS-frei"},
+    "YOLO11m": {"file": "yolo11m.pt", "desc": "Gute Balance"},
+    "YOLO26m": {"file": "yolo26m.pt", "desc": "Neueste Version, 43% schneller"},
+}
+
 
 def get_dataset_paths(dataset_path):
     """
@@ -907,48 +915,48 @@ class YOLOStudio(ctk.CTk):
         main = ctk.CTkFrame(self.tab2, fg_color="transparent")
         main.pack(fill="both", expand=True, padx=15, pady=15)
 
-        # Zentrale Box
-        center = ctk.CTkFrame(main, fg_color=BG_CARD, corner_radius=15)
-        center.pack(expand=True, pady=50)
+        # Linke Seite - Manuelles Labeling
+        left = ctk.CTkFrame(main, fg_color=BG_CARD, corner_radius=15)
+        left.pack(side="left", fill="both", expand=True, padx=(0, 10))
 
         ctk.CTkLabel(
-            center,
-            text="🏷️ Bild Labeling",
-            font=ctk.CTkFont(size=24, weight="bold")
-        ).pack(pady=(30, 10))
+            left,
+            text="🏷️ Manuelles Labeling",
+            font=ctk.CTkFont(size=20, weight="bold")
+        ).pack(pady=(25, 10))
 
         ctk.CTkLabel(
-            center,
-            text="Öffne das Labeling-Tool um Objekte auf\ndeinen Bildern zu markieren.",
+            left,
+            text="Öffne das Labeling-Tool um Objekte auf\ndeinen Bildern manuell zu markieren.",
             text_color=TEXT_MUTED,
             justify="center"
-        ).pack(pady=10)
+        ).pack(pady=5)
 
         # Dataset Auswahl
-        ctk.CTkLabel(center, text="Dataset:", font=ctk.CTkFont(weight="bold")).pack(pady=(20, 5))
-        self.labeling_dataset = ctk.CTkComboBox(center, values=self.get_dataset_names(), width=300)
+        ctk.CTkLabel(left, text="Dataset:", font=ctk.CTkFont(weight="bold")).pack(pady=(15, 5))
+        self.labeling_dataset = ctk.CTkComboBox(left, values=self.get_dataset_names(), width=300)
         self.labeling_dataset.pack(pady=5)
 
         ctk.CTkButton(
-            center,
+            left,
             text="🔄 Aktualisieren",
             command=self.refresh_labeling_datasets,
             width=200
         ).pack(pady=10)
 
         ctk.CTkButton(
-            center,
+            left,
             text="🏷️ Labeling Tool öffnen",
             command=self.open_labeling_tool,
             width=300,
             height=50,
             fg_color=PRIMARY,
             font=ctk.CTkFont(size=16, weight="bold")
-        ).pack(pady=30)
+        ).pack(pady=20)
 
         # Anleitung
-        help_frame = ctk.CTkFrame(center, fg_color="#1e3a5f", corner_radius=10)
-        help_frame.pack(fill="x", padx=30, pady=(0, 30))
+        help_frame = ctk.CTkFrame(left, fg_color="#1e3a5f", corner_radius=10)
+        help_frame.pack(fill="x", padx=30, pady=(0, 20))
 
         ctk.CTkLabel(
             help_frame,
@@ -965,6 +973,90 @@ class YOLOStudio(ctk.CTk):
             text_color=TEXT_MUTED,
             justify="left"
         ).pack(anchor="w", padx=15, pady=(0, 15))
+
+        # Rechte Seite - Auto-Labeler + Tools
+        right = ctk.CTkFrame(main, fg_color=BG_CARD, corner_radius=15)
+        right.pack(side="right", fill="both", expand=True, padx=(10, 0))
+
+        ctk.CTkLabel(
+            right,
+            text="🤖 Auto-Labeler",
+            font=ctk.CTkFont(size=20, weight="bold")
+        ).pack(pady=(25, 10))
+
+        ctk.CTkLabel(
+            right,
+            text="Nutze ein trainiertes Modell um\nBilder automatisch zu labeln.",
+            text_color=TEXT_MUTED,
+            justify="center"
+        ).pack(pady=5)
+
+        # Dataset
+        ctk.CTkLabel(right, text="Dataset:", font=ctk.CTkFont(weight="bold")).pack(pady=(15, 5))
+        self.auto_label_dataset = ctk.CTkComboBox(right, values=self.get_dataset_names(), width=300)
+        self.auto_label_dataset.pack(pady=5)
+
+        # Modell
+        ctk.CTkLabel(right, text="Modell (.pt):", font=ctk.CTkFont(weight="bold")).pack(pady=(10, 5))
+        self.auto_label_model = ctk.CTkComboBox(right, values=[], width=300)
+        self.auto_label_model.pack(pady=5)
+
+        model_btn_frame = ctk.CTkFrame(right, fg_color="transparent")
+        model_btn_frame.pack(pady=5)
+        ctk.CTkButton(model_btn_frame, text="🔄", command=self.refresh_auto_label_models, width=50).pack(side="left", padx=5)
+        ctk.CTkButton(model_btn_frame, text="📂 Modell laden...", command=self.browse_auto_label_model, width=150).pack(side="left", padx=5)
+
+        # Confidence
+        ctk.CTkLabel(right, text="Confidence:", font=ctk.CTkFont(weight="bold")).pack(pady=(10, 5))
+        conf_frame = ctk.CTkFrame(right, fg_color="transparent")
+        conf_frame.pack()
+        self.auto_conf_slider = ctk.CTkSlider(conf_frame, from_=0.01, to=1.0, width=200)
+        self.auto_conf_slider.set(0.25)
+        self.auto_conf_slider.pack(side="left")
+        self.auto_conf_label = ctk.CTkLabel(conf_frame, text="25%", width=50)
+        self.auto_conf_label.pack(side="left")
+        self.auto_conf_slider.configure(command=lambda v: self.auto_conf_label.configure(text=f"{int(v*100)}%"))
+
+        ctk.CTkButton(
+            right,
+            text="🤖 Auto-Label starten",
+            command=self.run_auto_label,
+            width=300,
+            height=50,
+            fg_color=WARNING,
+            font=ctk.CTkFont(size=16, weight="bold")
+        ).pack(pady=20)
+
+        self.auto_label_status = ctk.CTkLabel(right, text="", text_color=TEXT_MUTED)
+        self.auto_label_status.pack(pady=5)
+
+        # Trennlinie
+        ctk.CTkFrame(right, height=2, fg_color="#404050").pack(fill="x", padx=30, pady=10)
+
+        # Aufräumen
+        ctk.CTkLabel(
+            right,
+            text="🧹 Aufräumen",
+            font=ctk.CTkFont(size=16, weight="bold")
+        ).pack(pady=(10, 5))
+
+        ctk.CTkButton(
+            right,
+            text="🗑️ Bilder ohne Labels löschen",
+            command=self.delete_unlabeled_images,
+            width=300,
+            height=40,
+            fg_color=DANGER
+        ).pack(pady=10)
+
+        ctk.CTkLabel(
+            right,
+            text="Löscht alle Bilder die kein Label haben.\nYOLO nutzt beim Training nur gelabelte Bilder.",
+            text_color=TEXT_MUTED,
+            justify="center"
+        ).pack(pady=(0, 20))
+
+        self.refresh_auto_label_models()
 
     def refresh_labeling_datasets(self):
         """Aktualisiert Labeling Dataset-Liste."""
@@ -999,6 +1091,165 @@ class YOLOStudio(ctk.CTk):
 
         # Labeling-Fenster öffnen
         LabelingWindow(self, dataset_path, class_names)
+
+    def refresh_auto_label_models(self):
+        """Aktualisiert die Modell-Liste für Auto-Labeling."""
+        models = []
+        if self.modelle_path.exists():
+            for best_pt in self.modelle_path.glob("**/weights/best.pt"):
+                models.append(str(best_pt))
+        if models:
+            self.auto_label_model.configure(values=models)
+            self.auto_label_model.set(models[0])
+        else:
+            self.auto_label_model.configure(values=["Noch keine Modelle"])
+            self.auto_label_model.set("Noch keine Modelle")
+
+    def browse_auto_label_model(self):
+        """Modell manuell auswählen."""
+        file = filedialog.askopenfilename(
+            title="Modell auswählen",
+            filetypes=[("PyTorch", "*.pt")]
+        )
+        if file:
+            self.auto_label_model.set(file)
+
+    def run_auto_label(self):
+        """Auto-Labeling mit einem trainierten Modell."""
+        dataset_name = self.auto_label_dataset.get()
+        model_path = self.auto_label_model.get()
+
+        if not dataset_name:
+            messagebox.showerror("Fehler", "Bitte Dataset auswählen.")
+            return
+
+        if not model_path or "Noch keine" in model_path:
+            messagebox.showerror("Fehler", "Bitte Modell auswählen.\n\nDu brauchst ein trainiertes Modell.")
+            return
+
+        if not Path(model_path).exists():
+            messagebox.showerror("Fehler", f"Modell nicht gefunden:\n{model_path}")
+            return
+
+        dataset_path = self.datasets_path / dataset_name
+        paths = get_dataset_paths(dataset_path)
+        conf = self.auto_conf_slider.get()
+
+        # Alle Bilder sammeln
+        all_images = []
+        for img_dir in [paths["train_images"], paths["val_images"]]:
+            if img_dir and img_dir.exists():
+                for ext in ["*.jpg", "*.jpeg", "*.png", "*.bmp", "*.webp"]:
+                    all_images.extend(list(img_dir.glob(ext)))
+
+        if not all_images:
+            messagebox.showerror("Fehler", "Keine Bilder gefunden.")
+            return
+
+        self.auto_label_status.configure(text=f"⏳ Labele {len(all_images)} Bilder...")
+        self.update()
+
+        def do_auto_label():
+            try:
+                from ultralytics import YOLO
+
+                model = YOLO(model_path)
+                labeled = 0
+                skipped = 0
+                ds_format = paths["format"]
+
+                for img_path in all_images:
+                    # Label-Pfad bestimmen
+                    if ds_format in ["roboflow", "roboflow_nested"]:
+                        label_path = img_path.with_suffix(".txt")
+                    else:
+                        try:
+                            rel = img_path.relative_to(dataset_path / "images")
+                            label_path = dataset_path / "labels" / rel.with_suffix(".txt")
+                        except ValueError:
+                            label_path = img_path.with_suffix(".txt")
+
+                    # Nur labeln wenn noch kein Label existiert
+                    if label_path.exists() and label_path.stat().st_size > 0:
+                        skipped += 1
+                        continue
+
+                    # Erkennung
+                    results = model.predict(str(img_path), conf=conf, verbose=False)
+                    result = results[0]
+
+                    if result.boxes is not None and len(result.boxes) > 0:
+                        label_path.parent.mkdir(parents=True, exist_ok=True)
+                        img_w, img_h = result.orig_shape[1], result.orig_shape[0]
+
+                        with open(label_path, 'w') as f:
+                            for box in result.boxes:
+                                cls_id = int(box.cls[0])
+                                x1, y1, x2, y2 = box.xyxy[0].tolist()
+                                cx = ((x1 + x2) / 2) / img_w
+                                cy = ((y1 + y2) / 2) / img_h
+                                w = (x2 - x1) / img_w
+                                h = (y2 - y1) / img_h
+                                f.write(f"{cls_id} {cx:.6f} {cy:.6f} {w:.6f} {h:.6f}\n")
+
+                        labeled += 1
+
+                msg = f"✅ Fertig! {labeled} Bilder gelabelt, {skipped} übersprungen."
+                self.after(0, lambda: self.auto_label_status.configure(text=msg))
+                self.after(0, lambda: messagebox.showinfo("Auto-Label", msg))
+
+            except Exception as e:
+                error = str(e)
+                self.after(0, lambda: self.auto_label_status.configure(text=f"❌ Fehler: {error}"))
+                self.after(0, lambda: messagebox.showerror("Fehler", error))
+
+        threading.Thread(target=do_auto_label, daemon=True).start()
+
+    def delete_unlabeled_images(self):
+        """Löscht alle Bilder ohne zugehöriges Label."""
+        dataset_name = self.auto_label_dataset.get()
+        if not dataset_name:
+            # Versuche labeling_dataset
+            dataset_name = self.labeling_dataset.get()
+
+        if not dataset_name:
+            messagebox.showerror("Fehler", "Bitte Dataset auswählen.")
+            return
+
+        dataset_path = self.datasets_path / dataset_name
+        paths = get_dataset_paths(dataset_path)
+        ds_format = paths["format"]
+
+        # Alle Bilder sammeln
+        unlabeled = []
+        for img_dir in [paths["train_images"], paths["val_images"]]:
+            if not img_dir or not img_dir.exists():
+                continue
+            for ext in ["*.jpg", "*.jpeg", "*.png", "*.bmp", "*.webp"]:
+                for img_path in img_dir.glob(ext):
+                    # Label-Pfad bestimmen
+                    if ds_format in ["roboflow", "roboflow_nested"]:
+                        label_path = img_path.with_suffix(".txt")
+                    else:
+                        try:
+                            rel = img_path.relative_to(dataset_path / "images")
+                            label_path = dataset_path / "labels" / rel.with_suffix(".txt")
+                        except ValueError:
+                            label_path = img_path.with_suffix(".txt")
+
+                    # Prüfe ob Label existiert und nicht leer ist
+                    if not label_path.exists() or label_path.stat().st_size == 0:
+                        unlabeled.append(img_path)
+
+        if not unlabeled:
+            messagebox.showinfo("Aufräumen", "Alle Bilder haben Labels. Nichts zu löschen.")
+            return
+
+        if messagebox.askyesno("Löschen?", f"{len(unlabeled)} Bilder ohne Labels gefunden.\n\nWirklich löschen?"):
+            for img_path in unlabeled:
+                img_path.unlink()
+            messagebox.showinfo("Erfolg", f"{len(unlabeled)} Bilder gelöscht!")
+            self.refresh_datasets()
 
     # ==================== TAB 3: TRAINING ====================
     def create_training_tab(self):
@@ -1046,6 +1297,14 @@ class YOLOStudio(ctk.CTk):
 
         ctk.CTkButton(left, text="🔄 Aktualisieren", command=self.refresh_training_datasets, width=200).pack(anchor="w", padx=20, pady=10)
 
+        # YOLO Version
+        ctk.CTkLabel(left, text="🤖 YOLO Version:", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=20, pady=(10, 5))
+
+        model_names = [f"{k} - {v['desc']}" for k, v in YOLO_MODELS.items()]
+        self.yolo_version = ctk.CTkComboBox(left, values=model_names, width=380)
+        self.yolo_version.set(model_names[-1])  # Standard: neueste (v26)
+        self.yolo_version.pack(anchor="w", padx=20)
+
         # Parameter
         ctk.CTkLabel(left, text="⚙️ Einstellungen:", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=20, pady=(20, 10))
 
@@ -1074,7 +1333,8 @@ class YOLOStudio(ctk.CTk):
         ctk.CTkLabel(info, text="💡 Training Info:", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=15, pady=(15, 5))
         ctk.CTkLabel(
             info,
-            text="Verwendet YOLO11m für beste Ergebnisse.\n"
+            text="Wähle die YOLO Version oben aus.\n"
+                 "v26 = neueste, v8 = stabilste.\n"
                  "Modell wird gespeichert in:\n"
                  "modelle/[dataset]/weights/best.pt",
             text_color=TEXT_MUTED,
@@ -1139,6 +1399,11 @@ class YOLOStudio(ctk.CTk):
             messagebox.showerror("Fehler", "Ungültige Parameter.")
             return
 
+        # YOLO Version ermitteln
+        version_str = self.yolo_version.get().split(" - ")[0]  # z.B. "YOLOv8m"
+        model_info = YOLO_MODELS.get(version_str, YOLO_MODELS["YOLO26m"])
+        model_file = model_info["file"]
+
         self.is_training = True
         self.stop_training_flag = False
         self.start_btn.configure(state="disabled")
@@ -1150,21 +1415,22 @@ class YOLOStudio(ctk.CTk):
         self.log_text.insert("end", "=" * 50 + "\n")
         self.log_text.insert("end", f"🚀 Training gestartet!\n")
         self.log_text.insert("end", f"📁 Dataset: {dataset}\n")
+        self.log_text.insert("end", f"🤖 Modell: {version_str} ({model_file})\n")
         self.log_text.insert("end", f"📊 Epochen: {epochs} | Batch: {batch} | Größe: {imgsz}\n")
         self.log_text.insert("end", "=" * 50 + "\n\n")
 
         # Training in Thread
         def train():
             try:
-                self.after(0, lambda: self.log_text.insert("end", "⏳ Lade YOLO...\n"))
+                self.after(0, lambda: self.log_text.insert("end", f"⏳ Lade {version_str}...\n"))
 
                 from ultralytics import YOLO
 
                 self.after(0, lambda: self.log_text.insert("end", "✅ YOLO geladen!\n"))
-                self.after(0, lambda: self.log_text.insert("end", f"🤖 Verwende: yolo11m.pt\n\n"))
+                self.after(0, lambda: self.log_text.insert("end", f"🤖 Verwende: {model_file}\n\n"))
 
                 # Modell laden
-                model = YOLO("yolo11m.pt")
+                model = YOLO(model_file)
 
                 # Projekt-Pfad
                 project_path = str(self.modelle_path)
