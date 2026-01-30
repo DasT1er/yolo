@@ -159,6 +159,7 @@ class LabelingWindow(ctk.CTkToplevel):
         self.offset_x = 0
         self.offset_y = 0
         self.selected_class = 0
+        self.selected_box = -1  # Ausgewählte Box (-1 = keine)
 
         # Bilder laden
         self.image_list = []
@@ -246,16 +247,25 @@ class LabelingWindow(ctk.CTkToplevel):
             width=240
         ).pack(padx=15, pady=5)
 
-        ctk.CTkButton(
-            left, text="🗑️ Alle Boxen löschen",
-            command=self.clear_boxes,
+        self.delete_selected_btn = ctk.CTkButton(
+            left, text="❌ Ausgewählte Box löschen",
+            command=self.delete_selected_box,
             fg_color=DANGER,
-            width=240
-        ).pack(padx=15, pady=5)
+            width=240,
+            state="disabled"
+        )
+        self.delete_selected_btn.pack(padx=15, pady=5)
 
         ctk.CTkButton(
             left, text="↩️ Letzte Box löschen",
             command=self.delete_last_box,
+            width=240
+        ).pack(padx=15, pady=5)
+
+        ctk.CTkButton(
+            left, text="🗑️ Alle Boxen löschen",
+            command=self.clear_boxes,
+            fg_color="#7f1d1d",
             width=240
         ).pack(padx=15, pady=5)
 
@@ -271,11 +281,9 @@ class LabelingWindow(ctk.CTkToplevel):
 
         ctk.CTkLabel(
             help_frame,
-            text="1. Klasse oben auswählen\n"
-                 "2. Auf dem Bild ziehen um\n"
-                 "   eine Box zu zeichnen\n"
-                 "3. Labels speichern\n"
-                 "4. Weiter zum nächsten Bild",
+            text="Linksklick + Ziehen = Box zeichnen\n"
+                 "Rechtsklick = Box auswählen\n"
+                 "Dann 'Ausgewählte löschen'",
             text_color=TEXT_MUTED,
             justify="left"
         ).pack(anchor="w", padx=10, pady=(0, 10))
@@ -298,6 +306,7 @@ class LabelingWindow(ctk.CTkToplevel):
         self.canvas.bind("<ButtonPress-1>", self.on_mouse_down)
         self.canvas.bind("<B1-Motion>", self.on_mouse_move)
         self.canvas.bind("<ButtonRelease-1>", self.on_mouse_up)
+        self.canvas.bind("<ButtonPress-3>", self.on_right_click)  # Rechtsklick = Box auswählen
 
         # Resize Event
         self.canvas.bind("<Configure>", self.on_resize)
@@ -333,6 +342,7 @@ class LabelingWindow(ctk.CTkToplevel):
     def load_labels(self):
         """Lädt vorhandene Labels für das aktuelle Bild."""
         self.boxes = []
+        self.selected_box = -1
 
         if not self.current_image_path:
             return
@@ -408,19 +418,28 @@ class LabelingWindow(ctk.CTkToplevel):
 
         # Boxen zeichnen
         colors = ["#ef4444", "#f59e0b", "#22c55e", "#3b82f6", "#8b5cf6", "#ec4899", "#06b6d4", "#84cc16"]
-        for x1, y1, x2, y2, cls_id in self.boxes:
+        for i, (x1, y1, x2, y2, cls_id) in enumerate(self.boxes):
             # Koordinaten skalieren
             sx1 = int(x1 * self.scale) + self.offset_x
             sy1 = int(y1 * self.scale) + self.offset_y
             sx2 = int(x2 * self.scale) + self.offset_x
             sy2 = int(y2 * self.scale) + self.offset_y
 
+            is_selected = (i == self.selected_box)
             color = colors[cls_id % len(colors)]
-            self.canvas.create_rectangle(sx1, sy1, sx2, sy2, outline=color, width=2)
+            width = 4 if is_selected else 2
+            dash = () if not is_selected else ()
+
+            self.canvas.create_rectangle(sx1, sy1, sx2, sy2, outline=color, width=width)
+
+            # Highlight bei Auswahl
+            if is_selected:
+                self.canvas.create_rectangle(sx1 - 2, sy1 - 2, sx2 + 2, sy2 + 2, outline="#ffffff", width=1, dash=(4, 4))
 
             # Label
             label = self.class_names[cls_id] if cls_id < len(self.class_names) else f"Klasse {cls_id}"
-            self.canvas.create_text(sx1 + 5, sy1 + 5, text=label, fill=color, anchor="nw", font=("Arial", 10, "bold"))
+            prefix = ">> " if is_selected else ""
+            self.canvas.create_text(sx1 + 5, sy1 + 5, text=f"{prefix}{label}", fill=color, anchor="nw", font=("Arial", 10, "bold"))
 
     def on_resize(self, event):
         """Wird aufgerufen wenn Canvas-Größe sich ändert."""
@@ -471,12 +490,53 @@ class LabelingWindow(ctk.CTkToplevel):
             self.display_image()
             self.update_box_list()
 
+    def on_right_click(self, event):
+        """Rechtsklick - Box unter Cursor auswählen."""
+        if not self.current_image:
+            return
+
+        # Klick-Position in Bildkoordinaten umrechnen
+        img_x = int((event.x - self.offset_x) / self.scale)
+        img_y = int((event.y - self.offset_y) / self.scale)
+
+        # Box finden die den Klick enthält (letzte/oberste zuerst)
+        found = -1
+        for i in range(len(self.boxes) - 1, -1, -1):
+            x1, y1, x2, y2, cls_id = self.boxes[i]
+            if x1 <= img_x <= x2 and y1 <= img_y <= y2:
+                found = i
+                break
+
+        self.selected_box = found
+
+        if found >= 0:
+            cls_name = self.class_names[self.boxes[found][4]] if self.boxes[found][4] < len(self.class_names) else "?"
+            self.delete_selected_btn.configure(
+                state="normal",
+                text=f"❌ '{cls_name}' löschen (#{found+1})"
+            )
+        else:
+            self.delete_selected_btn.configure(state="disabled", text="❌ Ausgewählte Box löschen")
+
+        self.display_image()
+        self.update_box_list()
+
+    def delete_selected_box(self):
+        """Löscht die ausgewählte Box."""
+        if 0 <= self.selected_box < len(self.boxes):
+            self.boxes.pop(self.selected_box)
+            self.selected_box = -1
+            self.delete_selected_btn.configure(state="disabled", text="❌ Ausgewählte Box löschen")
+            self.display_image()
+            self.update_box_list()
+
     def update_box_list(self):
         """Aktualisiert die Box-Liste."""
         self.box_list.delete("1.0", "end")
         for i, (x1, y1, x2, y2, cls_id) in enumerate(self.boxes):
             cls_name = self.class_names[cls_id] if cls_id < len(self.class_names) else f"Klasse {cls_id}"
-            self.box_list.insert("end", f"{i+1}. {cls_name}\n")
+            marker = " ◄" if i == self.selected_box else ""
+            self.box_list.insert("end", f"{i+1}. {cls_name}{marker}\n")
 
     def update_counter(self):
         """Aktualisiert den Bild-Zähler."""
