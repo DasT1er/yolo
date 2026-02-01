@@ -1475,8 +1475,37 @@ class YOLOStudio(ctk.CTk):
         self.yolo_version.set(model_names[-1])  # Standard: neueste (v26)
         self.yolo_version.pack(anchor="w", padx=20)
 
+        # Training fortsetzen / Fine-Tuning
+        ctk.CTkLabel(left, text="🔄 Training fortsetzen:", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=20, pady=(15, 5))
+
+        self.resume_var = ctk.StringVar(value="neu")
+        resume_frame = ctk.CTkFrame(left, fg_color="transparent")
+        resume_frame.pack(anchor="w", padx=20)
+
+        ctk.CTkRadioButton(resume_frame, text="Neues Training", variable=self.resume_var,
+                           value="neu", command=self.toggle_resume_model).pack(side="left", padx=(0, 15))
+        ctk.CTkRadioButton(resume_frame, text="Fortsetzen", variable=self.resume_var,
+                           value="resume", command=self.toggle_resume_model).pack(side="left", padx=(0, 15))
+        ctk.CTkRadioButton(resume_frame, text="Fine-Tuning", variable=self.resume_var,
+                           value="finetune", command=self.toggle_resume_model).pack(side="left")
+
+        self.resume_model_frame = ctk.CTkFrame(left, fg_color="transparent")
+        self.resume_model_frame.pack(anchor="w", padx=20, fill="x")
+
+        self.resume_model_combo = ctk.CTkComboBox(self.resume_model_frame, values=[], width=300)
+        self.resume_model_combo.pack(side="left", pady=5)
+        self.resume_model_combo.set("")
+
+        ctk.CTkButton(self.resume_model_frame, text="📂", width=40,
+                      command=self.browse_resume_model).pack(side="left", padx=5)
+        ctk.CTkButton(self.resume_model_frame, text="🔄", width=40,
+                      command=self.refresh_resume_models).pack(side="left")
+
+        self.resume_model_frame.pack_forget()  # Versteckt bei "Neues Training"
+
         # Parameter
-        ctk.CTkLabel(left, text="⚙️ Einstellungen:", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=20, pady=(20, 10))
+        self.params_label = ctk.CTkLabel(left, text="⚙️ Einstellungen:", font=ctk.CTkFont(weight="bold"))
+        self.params_label.pack(anchor="w", padx=20, pady=(20, 10))
 
         params = ctk.CTkFrame(left, fg_color="transparent")
         params.pack(fill="x", padx=20)
@@ -1503,10 +1532,12 @@ class YOLOStudio(ctk.CTk):
         ctk.CTkLabel(info, text="💡 Training Info:", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=15, pady=(15, 5))
         ctk.CTkLabel(
             info,
-            text="Wähle die YOLO Version oben aus.\n"
-                 "v26 = neueste, v8 = stabilste.\n"
-                 "Modell wird gespeichert in:\n"
-                 "modelle/[dataset]/weights/best.pt",
+            text="Neues Training: Startet von Grund auf.\n"
+                 "Fortsetzen: Lädt last.pt und trainiert\n"
+                 "  weiter wo du aufgehört hast.\n"
+                 "Fine-Tuning: Bestehendes Modell mit\n"
+                 "  neuem/gleichem Dataset verbessern.\n\n"
+                 "Modelle: modelle/[dataset]/weights/",
             text_color=TEXT_MUTED,
             justify="left"
         ).pack(anchor="w", padx=15, pady=(0, 15))
@@ -1549,6 +1580,40 @@ class YOLOStudio(ctk.CTk):
         """Aktualisiert Training-Datasets."""
         self.train_dataset.configure(values=self.get_dataset_names())
 
+    def toggle_resume_model(self):
+        """Zeigt/versteckt Modell-Auswahl je nach Modus."""
+        mode = self.resume_var.get()
+        if mode == "neu":
+            self.resume_model_frame.pack_forget()
+        else:
+            # Pack after the resume_label_anchor (the radio button frame's parent area)
+            self.resume_model_frame.pack(anchor="w", padx=20, fill="x", before=self.params_label)
+            self.refresh_resume_models()
+
+    def refresh_resume_models(self):
+        """Aktualisiert die Liste der fortsetzbaren Modelle."""
+        models = []
+        if self.modelle_path.exists():
+            for pt_file in self.modelle_path.glob("**/weights/last.pt"):
+                models.append(str(pt_file))
+            for pt_file in self.modelle_path.glob("**/weights/best.pt"):
+                models.append(str(pt_file))
+        if models:
+            self.resume_model_combo.configure(values=models)
+            self.resume_model_combo.set(models[0])
+        else:
+            self.resume_model_combo.configure(values=["Noch keine Modelle"])
+            self.resume_model_combo.set("Noch keine Modelle")
+
+    def browse_resume_model(self):
+        """Modell zum Fortsetzen manuell auswählen."""
+        file = filedialog.askopenfilename(
+            title="Modell auswählen",
+            filetypes=[("PyTorch", "*.pt")]
+        )
+        if file:
+            self.resume_model_combo.set(file)
+
     def start_training(self):
         """Startet Training mit Python API."""
         dataset = self.train_dataset.get()
@@ -1574,6 +1639,18 @@ class YOLOStudio(ctk.CTk):
         model_info = YOLO_MODELS.get(version_str, YOLO_MODELS["YOLO26m"])
         model_file = model_info["file"]
 
+        # Modus ermitteln
+        train_mode = self.resume_var.get()  # "neu", "resume", "finetune"
+        resume_model_path = None
+        if train_mode in ("resume", "finetune"):
+            resume_model_path = self.resume_model_combo.get()
+            if not resume_model_path or resume_model_path == "Noch keine Modelle":
+                messagebox.showerror("Fehler", "Bitte ein bestehendes Modell auswählen.")
+                return
+            if not Path(resume_model_path).exists():
+                messagebox.showerror("Fehler", f"Modell nicht gefunden:\n{resume_model_path}")
+                return
+
         self.is_training = True
         self.stop_training_flag = False
         self.start_btn.configure(state="disabled")
@@ -1582,45 +1659,77 @@ class YOLOStudio(ctk.CTk):
         self.log_text.delete("1.0", "end")
         self.progress.set(0)
 
+        mode_text = {"neu": "Neues Training", "resume": "Training fortsetzen", "finetune": "Fine-Tuning"}[train_mode]
         self.log_text.insert("end", "=" * 50 + "\n")
-        self.log_text.insert("end", f"🚀 Training gestartet!\n")
+        self.log_text.insert("end", f"🚀 {mode_text} gestartet!\n")
         self.log_text.insert("end", f"📁 Dataset: {dataset}\n")
-        self.log_text.insert("end", f"🤖 Modell: {version_str} ({model_file})\n")
+        if train_mode == "neu":
+            self.log_text.insert("end", f"🤖 Modell: {version_str} ({model_file})\n")
+        elif train_mode == "resume":
+            self.log_text.insert("end", f"🔄 Fortsetzen von: {resume_model_path}\n")
+        else:
+            self.log_text.insert("end", f"🎯 Fine-Tuning von: {resume_model_path}\n")
         self.log_text.insert("end", f"📊 Epochen: {epochs} | Batch: {batch} | Größe: {imgsz}\n")
         self.log_text.insert("end", "=" * 50 + "\n\n")
 
         # Training in Thread
         def train():
             try:
-                self.after(0, lambda: self.log_text.insert("end", f"⏳ Lade {version_str}...\n"))
-
                 from ultralytics import YOLO
 
-                self.after(0, lambda: self.log_text.insert("end", "✅ YOLO geladen!\n"))
-                self.after(0, lambda: self.log_text.insert("end", f"🤖 Verwende: {model_file}\n\n"))
+                if train_mode == "resume":
+                    # Fortsetzen: last.pt laden mit resume=True
+                    self.after(0, lambda: self.log_text.insert("end", f"🔄 Lade Checkpoint: {resume_model_path}\n"))
+                    model = YOLO(resume_model_path)
+                    self.after(0, lambda: self.log_text.insert("end", "✅ Checkpoint geladen!\n"))
+                    self.after(0, lambda: self.log_text.insert("end", "🏋️ Setze Training fort...\n\n"))
 
-                # Modell laden
-                model = YOLO(model_file)
+                    results = model.train(resume=True)
 
-                # Projekt-Pfad
-                project_path = str(self.modelle_path)
+                elif train_mode == "finetune":
+                    # Fine-Tuning: bestehendes Modell mit neuem Dataset weitertrainieren
+                    self.after(0, lambda: self.log_text.insert("end", f"🎯 Lade Modell: {resume_model_path}\n"))
+                    model = YOLO(resume_model_path)
+                    self.after(0, lambda: self.log_text.insert("end", "✅ Modell geladen!\n"))
+                    self.after(0, lambda: self.log_text.insert("end", "🏋️ Starte Fine-Tuning...\n\n"))
 
-                self.after(0, lambda: self.log_text.insert("end", "🏋️ Starte Training...\n\n"))
+                    project_path = str(self.modelle_path)
+                    results = model.train(
+                        data=str(data_yaml),
+                        epochs=epochs,
+                        batch=batch,
+                        imgsz=imgsz,
+                        project=project_path,
+                        name=dataset,
+                        exist_ok=True,
+                        patience=50,
+                        save=True,
+                        plots=True,
+                        verbose=True
+                    )
 
-                # Training starten
-                results = model.train(
-                    data=str(data_yaml),
-                    epochs=epochs,
-                    batch=batch,
-                    imgsz=imgsz,
-                    project=project_path,
-                    name=dataset,
-                    exist_ok=True,
-                    patience=50,
-                    save=True,
-                    plots=True,
-                    verbose=True
-                )
+                else:
+                    # Neues Training
+                    self.after(0, lambda: self.log_text.insert("end", f"⏳ Lade {version_str}...\n"))
+                    model = YOLO(model_file)
+                    self.after(0, lambda: self.log_text.insert("end", "✅ YOLO geladen!\n"))
+                    self.after(0, lambda: self.log_text.insert("end", f"🤖 Verwende: {model_file}\n\n"))
+                    self.after(0, lambda: self.log_text.insert("end", "🏋️ Starte Training...\n\n"))
+
+                    project_path = str(self.modelle_path)
+                    results = model.train(
+                        data=str(data_yaml),
+                        epochs=epochs,
+                        batch=batch,
+                        imgsz=imgsz,
+                        project=project_path,
+                        name=dataset,
+                        exist_ok=True,
+                        patience=50,
+                        save=True,
+                        plots=True,
+                        verbose=True
+                    )
 
                 # Erfolg
                 model_path = self.modelle_path / dataset / "weights" / "best.pt"
