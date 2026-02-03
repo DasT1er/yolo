@@ -12,6 +12,7 @@ import customtkinter as ctk
 from tkinter import filedialog, messagebox, Canvas
 from PIL import Image, ImageTk, ImageDraw
 import threading
+import time
 import sys
 import os
 from pathlib import Path
@@ -612,6 +613,16 @@ class YOLOStudio(ctk.CTk):
         self.current_dataset = None
         self.test_image_path = None
 
+        # Capture Status
+        self.capture_running = False
+        self.capture_auto_running = False
+        self.capture_cap = None
+        self.capture_count = 0
+
+        # Live-Test Status
+        self.live_running = False
+        self.live_cap = None
+
         self.create_ui()
 
     def create_ui(self):
@@ -635,14 +646,16 @@ class YOLOStudio(ctk.CTk):
         self.tabview = ctk.CTkTabview(self, corner_radius=15)
         self.tabview.pack(fill="both", expand=True, padx=20, pady=(0, 20))
 
-        # 4 Tabs inkl. Labeling
+        # 6 Tabs
         self.tab1 = self.tabview.add("1️⃣ Dataset")
         self.tab2 = self.tabview.add("2️⃣ Labeling")
-        self.tab3 = self.tabview.add("3️⃣ Training")
-        self.tab4 = self.tabview.add("4️⃣ Testen")
+        self.tab3 = self.tabview.add("3️⃣ Aufnahme")
+        self.tab4 = self.tabview.add("4️⃣ Training")
+        self.tab5 = self.tabview.add("5️⃣ Testen")
 
         self.create_dataset_tab()
         self.create_labeling_tab()
+        self.create_capture_tab()
         self.create_training_tab()
         self.create_testing_tab()
 
@@ -1421,10 +1434,274 @@ class YOLOStudio(ctk.CTk):
         messagebox.showinfo("Erfolg", f"Klasse {cls_id} ('{cls_name}') gelöscht!\n{removed_lines} Labels entfernt.")
         self.refresh_datasets()
 
-    # ==================== TAB 3: TRAINING ====================
+    # ==================== TAB 3: AUFNAHME ====================
+    def create_capture_tab(self):
+        """Bild-Aufnahme Tab - Webcam und Bildschirm."""
+        main = ctk.CTkFrame(self.tab3, fg_color="transparent")
+        main.pack(fill="both", expand=True, padx=15, pady=15)
+
+        # Linke Seite - Einstellungen
+        left = ctk.CTkFrame(main, fg_color=BG_CARD, corner_radius=15, width=400)
+        left.pack(side="left", fill="y", padx=(0, 15))
+        left.pack_propagate(False)
+
+        ctk.CTkLabel(left, text="📸 Bilder aufnehmen", font=ctk.CTkFont(size=22, weight="bold")).pack(pady=20)
+
+        # Quelle
+        ctk.CTkLabel(left, text="📷 Quelle:", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=20, pady=(10, 5))
+
+        self.capture_source = ctk.CTkComboBox(left, values=["Webcam", "Bildschirm"], width=340)
+        self.capture_source.set("Webcam")
+        self.capture_source.pack(anchor="w", padx=20)
+
+        # Webcam-Auswahl
+        ctk.CTkLabel(left, text="🎥 Webcam ID:", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=20, pady=(15, 5))
+        self.webcam_id = ctk.CTkEntry(left, width=100, placeholder_text="0")
+        self.webcam_id.insert(0, "0")
+        self.webcam_id.pack(anchor="w", padx=20)
+
+        # Ziel-Dataset
+        ctk.CTkLabel(left, text="📁 Ziel-Dataset:", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=20, pady=(15, 5))
+
+        ds_frame = ctk.CTkFrame(left, fg_color="transparent")
+        ds_frame.pack(anchor="w", padx=20, fill="x")
+
+        self.capture_dataset = ctk.CTkComboBox(ds_frame, values=self.get_dataset_names(), width=260)
+        self.capture_dataset.pack(side="left")
+        self.capture_dataset.set("")
+
+        ctk.CTkButton(ds_frame, text="🔄", width=40,
+                      command=self.refresh_capture_datasets).pack(side="left", padx=5)
+
+        # Split-Auswahl
+        ctk.CTkLabel(left, text="📂 Speichern in:", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=20, pady=(15, 5))
+        self.capture_split = ctk.CTkComboBox(left, values=["train", "valid", "test"], width=340)
+        self.capture_split.set("train")
+        self.capture_split.pack(anchor="w", padx=20)
+
+        # Trennlinie
+        ctk.CTkLabel(left, text="").pack(pady=5)
+
+        # Manuelle Aufnahme
+        self.capture_preview_btn = ctk.CTkButton(
+            left, text="▶️ Vorschau starten", command=self.toggle_capture_preview,
+            width=340, height=40, fg_color=PRIMARY
+        )
+        self.capture_preview_btn.pack(padx=20, pady=5)
+
+        self.capture_single_btn = ctk.CTkButton(
+            left, text="📸 Foto aufnehmen", command=self.capture_single,
+            width=340, height=45, fg_color=SUCCESS, font=ctk.CTkFont(weight="bold"),
+            state="disabled"
+        )
+        self.capture_single_btn.pack(padx=20, pady=5)
+
+        # Auto-Aufnahme
+        ctk.CTkLabel(left, text="⏱️ Auto-Aufnahme:", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=20, pady=(15, 5))
+
+        auto_frame = ctk.CTkFrame(left, fg_color="transparent")
+        auto_frame.pack(fill="x", padx=20)
+
+        ctk.CTkLabel(auto_frame, text="Intervall (Sek):", width=120, anchor="w").pack(side="left")
+        self.capture_interval = ctk.CTkEntry(auto_frame, width=80)
+        self.capture_interval.insert(0, "2")
+        self.capture_interval.pack(side="left", padx=5)
+
+        self.auto_capture_btn = ctk.CTkButton(
+            left, text="🔄 Auto-Aufnahme starten", command=self.toggle_auto_capture,
+            width=340, height=40, fg_color=WARNING, state="disabled"
+        )
+        self.auto_capture_btn.pack(padx=20, pady=10)
+
+        # Counter
+        self.capture_counter_label = ctk.CTkLabel(left, text="📊 Aufnahmen: 0", font=ctk.CTkFont(size=14))
+        self.capture_counter_label.pack(pady=5)
+
+        # Rechte Seite - Vorschau
+        right = ctk.CTkFrame(main, fg_color=BG_CARD, corner_radius=15)
+        right.pack(side="right", fill="both", expand=True)
+
+        ctk.CTkLabel(right, text="👁️ Vorschau", font=ctk.CTkFont(size=18, weight="bold")).pack(pady=15)
+
+        self.capture_preview_label = ctk.CTkLabel(
+            right,
+            text="📸\n\nVorschau starten um\nWebcam/Bildschirm zu sehen",
+            font=ctk.CTkFont(size=16),
+            text_color=TEXT_MUTED
+        )
+        self.capture_preview_label.pack(fill="both", expand=True, padx=20, pady=(0, 20))
+
+    def refresh_capture_datasets(self):
+        """Aktualisiert Capture-Dataset-Liste."""
+        self.capture_dataset.configure(values=self.get_dataset_names())
+
+    def toggle_capture_preview(self):
+        """Startet/Stoppt die Vorschau."""
+        if self.capture_running:
+            self.stop_capture_preview()
+        else:
+            self.start_capture_preview()
+
+    def start_capture_preview(self):
+        """Startet Kamera/Bildschirm-Vorschau."""
+        import cv2
+
+        source = self.capture_source.get()
+
+        if source == "Webcam":
+            try:
+                cam_id = int(self.webcam_id.get())
+            except ValueError:
+                cam_id = 0
+            self.capture_cap = cv2.VideoCapture(cam_id)
+            if not self.capture_cap.isOpened():
+                messagebox.showerror("Fehler", f"Webcam {cam_id} konnte nicht geöffnet werden.")
+                self.capture_cap = None
+                return
+        else:
+            # Bildschirm - wird pro Frame aufgenommen
+            self.capture_cap = "screen"
+
+        self.capture_running = True
+        self.capture_preview_btn.configure(text="⏹️ Vorschau stoppen", fg_color=DANGER)
+        self.capture_single_btn.configure(state="normal")
+        self.auto_capture_btn.configure(state="normal")
+        self.update_capture_preview()
+
+    def stop_capture_preview(self):
+        """Stoppt die Vorschau."""
+        self.capture_running = False
+        self.capture_auto_running = False
+        self.auto_capture_btn.configure(text="🔄 Auto-Aufnahme starten", fg_color=WARNING)
+
+        if self.capture_cap is not None and self.capture_cap != "screen":
+            self.capture_cap.release()
+        self.capture_cap = None
+
+        self.capture_preview_btn.configure(text="▶️ Vorschau starten", fg_color=PRIMARY)
+        self.capture_single_btn.configure(state="disabled")
+        self.auto_capture_btn.configure(state="disabled")
+        self.capture_preview_label.configure(
+            image=None,
+            text="📸\n\nVorschau starten um\nWebcam/Bildschirm zu sehen"
+        )
+
+    def get_capture_frame(self):
+        """Holt aktuellen Frame von Webcam oder Bildschirm."""
+        import cv2
+        import numpy as np
+
+        if self.capture_cap == "screen":
+            try:
+                from PIL import ImageGrab
+                screenshot = ImageGrab.grab()
+                frame = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2BGR)
+                return True, frame
+            except Exception:
+                return False, None
+        elif self.capture_cap is not None:
+            return self.capture_cap.read()
+        return False, None
+
+    def update_capture_preview(self):
+        """Aktualisiert die Vorschau."""
+        if not self.capture_running:
+            return
+
+        import cv2
+
+        ret, frame = self.get_capture_frame()
+        if ret and frame is not None:
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            img = Image.fromarray(frame_rgb)
+            img.thumbnail((900, 700))
+            photo = ctk.CTkImage(img, size=img.size)
+            self.capture_preview_label.configure(image=photo, text="")
+            self.capture_preview_label.image = photo
+
+        self.after(33, self.update_capture_preview)  # ~30 FPS
+
+    def capture_single(self):
+        """Nimmt ein einzelnes Foto auf und speichert es."""
+        import cv2
+
+        dataset_name = self.capture_dataset.get()
+        if not dataset_name:
+            messagebox.showerror("Fehler", "Bitte Ziel-Dataset auswählen.")
+            return
+
+        ret, frame = self.get_capture_frame()
+        if not ret or frame is None:
+            messagebox.showerror("Fehler", "Kein Frame verfügbar.")
+            return
+
+        self.save_capture_frame(frame, dataset_name)
+
+    def save_capture_frame(self, frame, dataset_name):
+        """Speichert einen Frame in das Dataset."""
+        import cv2
+
+        dataset_path = self.datasets_path / dataset_name
+        split = self.capture_split.get()
+
+        # Pfad ermitteln (Roboflow vs Standard)
+        paths = get_dataset_paths(str(dataset_path))
+        if paths["format"] == "roboflow":
+            save_dir = dataset_path / split
+        else:
+            save_dir = dataset_path / "images" / split
+
+        save_dir.mkdir(parents=True, exist_ok=True)
+
+        # Dateiname mit Timestamp
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        filename = f"capture_{timestamp}_{self.capture_count:04d}.jpg"
+        filepath = save_dir / filename
+
+        cv2.imwrite(str(filepath), frame)
+        self.capture_count += 1
+        self.capture_counter_label.configure(text=f"📊 Aufnahmen: {self.capture_count}")
+
+    def toggle_auto_capture(self):
+        """Startet/Stoppt Auto-Aufnahme."""
+        if self.capture_auto_running:
+            self.capture_auto_running = False
+            self.auto_capture_btn.configure(text="🔄 Auto-Aufnahme starten", fg_color=WARNING)
+        else:
+            dataset_name = self.capture_dataset.get()
+            if not dataset_name:
+                messagebox.showerror("Fehler", "Bitte Ziel-Dataset auswählen.")
+                return
+
+            try:
+                interval = float(self.capture_interval.get())
+                if interval < 0.1:
+                    interval = 0.1
+            except ValueError:
+                interval = 2.0
+
+            self.capture_auto_running = True
+            self.auto_capture_btn.configure(text="⏹️ Auto-Aufnahme stoppen", fg_color=DANGER)
+            self.run_auto_capture(interval, dataset_name)
+
+    def run_auto_capture(self, interval, dataset_name):
+        """Auto-Aufnahme Loop."""
+        if not self.capture_auto_running or not self.capture_running:
+            self.capture_auto_running = False
+            self.auto_capture_btn.configure(text="🔄 Auto-Aufnahme starten", fg_color=WARNING)
+            return
+
+        import cv2
+        ret, frame = self.get_capture_frame()
+        if ret and frame is not None:
+            self.save_capture_frame(frame, dataset_name)
+
+        self.after(int(interval * 1000), lambda: self.run_auto_capture(interval, dataset_name))
+
+    # ==================== TAB 4: TRAINING ====================
     def create_training_tab(self):
         """Training Tab mit Python API."""
-        main = ctk.CTkFrame(self.tab3, fg_color="transparent")
+        main = ctk.CTkFrame(self.tab4, fg_color="transparent")
         main.pack(fill="both", expand=True, padx=15, pady=15)
 
         # Linke Seite
@@ -1795,10 +2072,10 @@ class YOLOStudio(ctk.CTk):
         self.status_label.configure(text="⏹️ Gestoppt", text_color=WARNING)
         self.log_text.insert("end", "\n⏹️ Training wird gestoppt...\n")
 
-    # ==================== TAB 4: TESTEN ====================
+    # ==================== TAB 5: TESTEN ====================
     def create_testing_tab(self):
         """Test Tab."""
-        main = ctk.CTkFrame(self.tab4, fg_color="transparent")
+        main = ctk.CTkFrame(self.tab5, fg_color="transparent")
         main.pack(fill="both", expand=True, padx=15, pady=15)
 
         # Linke Seite
@@ -1854,6 +2131,26 @@ class YOLOStudio(ctk.CTk):
             fg_color=SUCCESS,
             font=ctk.CTkFont(weight="bold")
         ).pack(padx=20, pady=10)
+
+        # Live-Test
+        ctk.CTkLabel(left, text="🎥 Live-Erkennung:", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=20, pady=(15, 5))
+
+        live_source_frame = ctk.CTkFrame(left, fg_color="transparent")
+        live_source_frame.pack(fill="x", padx=20)
+
+        self.live_source = ctk.CTkComboBox(live_source_frame, values=["Webcam", "Bildschirm"], width=180)
+        self.live_source.set("Webcam")
+        self.live_source.pack(side="left")
+
+        self.live_cam_id = ctk.CTkEntry(live_source_frame, width=60, placeholder_text="0")
+        self.live_cam_id.insert(0, "0")
+        self.live_cam_id.pack(side="left", padx=5)
+
+        self.live_btn = ctk.CTkButton(
+            left, text="🎥 Live-Test starten", command=self.toggle_live_test,
+            width=340, height=45, fg_color=WARNING
+        )
+        self.live_btn.pack(padx=20, pady=10)
 
         # Ergebnisse
         ctk.CTkLabel(left, text="📊 Ergebnisse:", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=20, pady=(20, 5))
@@ -1974,6 +2271,137 @@ class YOLOStudio(ctk.CTk):
 
         except Exception as e:
             messagebox.showerror("Fehler", str(e))
+
+    def toggle_live_test(self):
+        """Startet/Stoppt Live-Erkennung."""
+        if self.live_running:
+            self.stop_live_test()
+        else:
+            self.start_live_test()
+
+    def start_live_test(self):
+        """Startet Live-Erkennung über Webcam/Bildschirm."""
+        model_path = self.model_combo.get()
+        if not model_path or "Noch keine" in model_path:
+            messagebox.showerror("Fehler", "Bitte trainiertes Modell auswählen.")
+            return
+        if not Path(model_path).exists():
+            messagebox.showerror("Fehler", f"Modell nicht gefunden:\n{model_path}")
+            return
+
+        import cv2
+
+        source = self.live_source.get()
+        if source == "Webcam":
+            try:
+                cam_id = int(self.live_cam_id.get())
+            except ValueError:
+                cam_id = 0
+            self.live_cap = cv2.VideoCapture(cam_id)
+            if not self.live_cap.isOpened():
+                messagebox.showerror("Fehler", f"Webcam {cam_id} nicht verfügbar.")
+                self.live_cap = None
+                return
+        else:
+            self.live_cap = "screen"
+
+        # Modell laden
+        try:
+            from ultralytics import YOLO
+            self.live_model = YOLO(model_path)
+        except Exception as e:
+            messagebox.showerror("Fehler", f"Modell laden fehlgeschlagen:\n{e}")
+            if self.live_cap is not None and self.live_cap != "screen":
+                self.live_cap.release()
+            self.live_cap = None
+            return
+
+        self.live_running = True
+        self.live_btn.configure(text="⏹️ Live-Test stoppen", fg_color=DANGER)
+        self.results_box.delete("1.0", "end")
+        self.results_box.insert("end", "🎥 Live-Erkennung läuft...\n")
+        self.update_live_test()
+
+    def stop_live_test(self):
+        """Stoppt Live-Erkennung."""
+        self.live_running = False
+        if self.live_cap is not None and self.live_cap != "screen":
+            self.live_cap.release()
+        self.live_cap = None
+        self.live_model = None
+        self.live_btn.configure(text="🎥 Live-Test starten", fg_color=WARNING)
+        self.results_box.insert("end", "\n⏹️ Live-Erkennung gestoppt.\n")
+
+    def get_live_frame(self):
+        """Holt Frame für Live-Test."""
+        import cv2
+        import numpy as np
+
+        if self.live_cap == "screen":
+            try:
+                from PIL import ImageGrab
+                screenshot = ImageGrab.grab()
+                frame = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2BGR)
+                return True, frame
+            except Exception:
+                return False, None
+        elif self.live_cap is not None:
+            return self.live_cap.read()
+        return False, None
+
+    def update_live_test(self):
+        """Live-Erkennung Frame-Update."""
+        if not self.live_running:
+            return
+
+        import cv2
+
+        ret, frame = self.get_live_frame()
+        if ret and frame is not None:
+            conf = self.conf_slider.get()
+            results = self.live_model.predict(frame, conf=conf, verbose=False)
+            result = results[0]
+
+            # Annotiertes Bild anzeigen
+            annotated = result.plot()
+            frame_rgb = cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB)
+            img = Image.fromarray(frame_rgb)
+            img.thumbnail((900, 700))
+            photo = ctk.CTkImage(img, size=img.size)
+            self.image_label.configure(image=photo, text="")
+            self.image_label.image = photo
+
+            # Ergebnisse aktualisieren
+            self.results_box.delete("1.0", "end")
+            self.results_box.insert("end", "🎥 Live-Erkennung\n")
+            self.results_box.insert("end", "-" * 25 + "\n")
+            if result.boxes is not None and len(result.boxes) > 0:
+                self.results_box.insert("end", f"✅ {len(result.boxes)} gefunden:\n")
+                for box in result.boxes:
+                    cls_id = int(box.cls[0])
+                    cls_name = result.names[cls_id]
+                    conf_val = float(box.conf[0])
+                    self.results_box.insert("end", f"• {cls_name}: {conf_val:.1%}\n")
+            else:
+                self.results_box.insert("end", "Nichts erkannt\n")
+
+        self.after(50, self.update_live_test)  # ~20 FPS
+
+    def destroy(self):
+        """Cleanup beim Schließen."""
+        self.capture_running = False
+        self.live_running = False
+        if self.capture_cap is not None and self.capture_cap != "screen":
+            try:
+                self.capture_cap.release()
+            except Exception:
+                pass
+        if self.live_cap is not None and self.live_cap != "screen":
+            try:
+                self.live_cap.release()
+            except Exception:
+                pass
+        super().destroy()
 
 
 def main():
