@@ -205,6 +205,10 @@ class LabelingWindow(ctk.CTkToplevel):
             font=ctk.CTkFont(size=20, weight="bold")
         ).pack(side="left", padx=15, pady=15)
 
+        # Status-Anzeige (statt Popup)
+        self.save_status = ctk.CTkLabel(header, text="", text_color=SUCCESS, font=ctk.CTkFont(size=13))
+        self.save_status.pack(side="left", padx=10)
+
         # Navigation
         nav = ctk.CTkFrame(header, fg_color="transparent")
         nav.pack(side="right", padx=15)
@@ -679,6 +683,7 @@ class LabelingWindow(ctk.CTkToplevel):
             self.boxes.append((x1, y1, x2, y2, self.selected_class))
             self.display_image()
             self.update_box_list()
+            self.save_labels()
 
     def on_right_click(self, event):
         """Rechtsklick - Box unter Cursor auswählen."""
@@ -719,6 +724,7 @@ class LabelingWindow(ctk.CTkToplevel):
             self.delete_selected_btn.configure(state="disabled", text="❌ Ausgewählte Box löschen")
             self.display_image()
             self.update_box_list()
+            self.save_labels()
 
     def update_box_list(self):
         """Aktualisiert die Box-Liste."""
@@ -732,8 +738,8 @@ class LabelingWindow(ctk.CTkToplevel):
         """Aktualisiert den Bild-Zähler."""
         self.img_counter.configure(text=f"{self.current_index + 1}/{len(self.image_list)}")
 
-    def save_labels(self):
-        """Speichert die Labels im YOLO-Format."""
+    def save_labels(self, silent=True):
+        """Speichert die Labels im YOLO-Format. Auto-Save ohne Popup."""
         if not self.current_image_path:
             return
 
@@ -744,20 +750,25 @@ class LabelingWindow(ctk.CTkToplevel):
 
         with open(label_path, 'w') as f:
             for x1, y1, x2, y2, cls_id in self.boxes:
-                # Pixel zu YOLO Format konvertieren
                 cx = ((x1 + x2) / 2) / img_w
                 cy = ((y1 + y2) / 2) / img_h
                 w = (x2 - x1) / img_w
                 h = (y2 - y1) / img_h
                 f.write(f"{cls_id} {cx:.6f} {cy:.6f} {w:.6f} {h:.6f}\n")
 
-        messagebox.showinfo("Gespeichert", f"Labels gespeichert!\n{label_path}")
+        # Kurze Status-Anzeige im Header
+        self.save_status.configure(text=f"✅ Gespeichert ({len(self.boxes)} Boxen)")
+        # Nach 2 Sekunden wieder ausblenden
+        if hasattr(self, '_save_status_timer'):
+            self.after_cancel(self._save_status_timer)
+        self._save_status_timer = self.after(2000, lambda: self.save_status.configure(text=""))
 
     def clear_boxes(self):
         """Löscht alle Boxen."""
         self.boxes = []
         self.display_image()
         self.update_box_list()
+        self.save_labels()
 
     def delete_last_box(self):
         """Löscht die letzte Box."""
@@ -765,19 +776,23 @@ class LabelingWindow(ctk.CTkToplevel):
             self.boxes.pop()
             self.display_image()
             self.update_box_list()
+            self.save_labels()
 
     def prev_image(self):
         """Vorheriges Bild."""
+        self.save_labels()
         if self.current_index > 0:
             self.load_image(self.current_index - 1)
 
     def next_image(self):
         """Nächstes Bild."""
+        self.save_labels()
         if self.current_index < len(self.image_list) - 1:
             self.load_image(self.current_index + 1)
 
     def destroy(self):
-        """Cleanup - bind_all entfernen."""
+        """Cleanup - Labels speichern und bind_all entfernen."""
+        self.save_labels()
         try:
             self.unbind_all("<MouseWheel>")
         except Exception:
