@@ -318,10 +318,19 @@ class LabelingWindow(ctk.CTkToplevel):
         self.canvas.bind("<ButtonRelease-1>", self.on_mouse_up)
         self.canvas.bind("<ButtonPress-3>", self.on_right_click)  # Rechtsklick = Box auswählen
 
-        # Zoom (Mausrad)
+        # Zoom (Mausrad) - auf Canvas UND Fenster binden für Windows-Kompatibilität
         self.canvas.bind("<MouseWheel>", self.on_mouse_wheel)  # Windows/Mac
         self.canvas.bind("<Button-4>", self.on_mouse_wheel)     # Linux scroll up
         self.canvas.bind("<Button-5>", self.on_mouse_wheel)     # Linux scroll down
+        # Auch auf Fenster-Ebene binden (Windows braucht das oft)
+        self.bind("<MouseWheel>", self.on_mouse_wheel_window)
+        self.bind("<Button-4>", self.on_mouse_wheel_window)
+        self.bind("<Button-5>", self.on_mouse_wheel_window)
+        # bind_all als letzter Fallback für Windows
+        self.bind_all("<MouseWheel>", self.on_mouse_wheel_window)
+
+        # Canvas bekommt Fokus bei Mausbewegung (nötig für Scroll-Events auf Windows)
+        self.canvas.bind("<Enter>", lambda e: self.canvas.focus_set())
 
         # Pan (Mittelklick oder Ctrl+Linksklick)
         self.canvas.bind("<ButtonPress-2>", self.on_pan_start)
@@ -331,7 +340,7 @@ class LabelingWindow(ctk.CTkToplevel):
         self.canvas.bind("<Control-B1-Motion>", self.on_pan_move)
         self.canvas.bind("<Control-ButtonRelease-1>", self.on_pan_end)
 
-        # Zoom Reset (Doppelklick Mitte oder Taste 0)
+        # Zoom Reset (Taste 0)
         self.bind("<Key-0>", self.reset_zoom)
 
         # Resize Event
@@ -484,6 +493,27 @@ class LabelingWindow(ctk.CTkToplevel):
         """Wird aufgerufen wenn Canvas-Größe sich ändert."""
         self.display_image()
 
+    def on_mouse_wheel_window(self, event):
+        """Fenster-Level Mausrad-Event - leitet an Canvas weiter."""
+        # Prüfen ob Maus über dem Canvas ist
+        try:
+            widget = event.widget
+            # Canvas-Position auf dem Bildschirm
+            cx = self.canvas.winfo_rootx()
+            cy = self.canvas.winfo_rooty()
+            cw = self.canvas.winfo_width()
+            ch = self.canvas.winfo_height()
+            # Maus-Position auf dem Bildschirm
+            mx = event.x_root
+            my = event.y_root
+            if cx <= mx <= cx + cw and cy <= my <= cy + ch:
+                # Relative Position zum Canvas berechnen
+                event.x = mx - cx
+                event.y = my - cy
+                self.on_mouse_wheel(event)
+        except Exception:
+            pass
+
     def on_mouse_wheel(self, event):
         """Zoom mit Mausrad - zoomt zur Mausposition."""
         if not self.current_image:
@@ -493,7 +523,7 @@ class LabelingWindow(ctk.CTkToplevel):
         mouse_x = event.x
         mouse_y = event.y
 
-        # Zoom-Faktor bestimmen
+        # Zoom-Faktor bestimmen (Windows: delta=120/-120, Linux: Button-4/5)
         if event.num == 4 or (hasattr(event, 'delta') and event.delta > 0):
             factor = 1.15
         elif event.num == 5 or (hasattr(event, 'delta') and event.delta < 0):
@@ -505,7 +535,6 @@ class LabelingWindow(ctk.CTkToplevel):
         self.zoom_level = max(0.5, min(old_zoom * factor, 20.0))
 
         # Pan anpassen damit Zoom zur Mausposition geht
-        # Bild-Mitte auf Canvas (ohne Pan)
         canvas_w = self.canvas.winfo_width()
         canvas_h = self.canvas.winfo_height()
         img_w, img_h = self.current_image.size
@@ -528,6 +557,7 @@ class LabelingWindow(ctk.CTkToplevel):
         self.pan_y = int(mouse_y - new_center_y - img_y * new_scale)
 
         self.display_image()
+        return "break"  # Event nicht weitergeben
 
     def on_pan_start(self, event):
         """Pan starten (Mittelklick oder Ctrl+Linksklick)."""
@@ -696,6 +726,14 @@ class LabelingWindow(ctk.CTkToplevel):
         """Nächstes Bild."""
         if self.current_index < len(self.image_list) - 1:
             self.load_image(self.current_index + 1)
+
+    def destroy(self):
+        """Cleanup - bind_all entfernen."""
+        try:
+            self.unbind_all("<MouseWheel>")
+        except Exception:
+            pass
+        super().destroy()
 
 
 class YOLOStudio(ctk.CTk):
