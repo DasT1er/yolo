@@ -146,6 +146,10 @@ class LabelingWindow(ctk.CTkToplevel):
         self.geometry("1400x900")
         self.minsize(1200, 800)
 
+        # Fenster nach vorne und Fokus halten (Windows CTkToplevel Bug)
+        self.after(100, self.lift)
+        self.after(200, self.focus_force)
+
         self.dataset_path = Path(dataset_path)
         self.class_names = class_names
         self.current_image_path = None
@@ -738,30 +742,32 @@ class LabelingWindow(ctk.CTkToplevel):
         """Aktualisiert den Bild-Zähler."""
         self.img_counter.configure(text=f"{self.current_index + 1}/{len(self.image_list)}")
 
-    def save_labels(self, silent=True):
+    def save_labels(self):
         """Speichert die Labels im YOLO-Format. Auto-Save ohne Popup."""
-        if not self.current_image_path:
+        if not self.current_image_path or not self.current_image:
             return
 
-        label_path = self.get_label_path()
-        label_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            label_path = self.get_label_path()
+            label_path.parent.mkdir(parents=True, exist_ok=True)
 
-        img_w, img_h = self.current_image.size
+            img_w, img_h = self.current_image.size
 
-        with open(label_path, 'w') as f:
-            for x1, y1, x2, y2, cls_id in self.boxes:
-                cx = ((x1 + x2) / 2) / img_w
-                cy = ((y1 + y2) / 2) / img_h
-                w = (x2 - x1) / img_w
-                h = (y2 - y1) / img_h
-                f.write(f"{cls_id} {cx:.6f} {cy:.6f} {w:.6f} {h:.6f}\n")
+            with open(label_path, 'w') as f:
+                for x1, y1, x2, y2, cls_id in self.boxes:
+                    cx = ((x1 + x2) / 2) / img_w
+                    cy = ((y1 + y2) / 2) / img_h
+                    w = (x2 - x1) / img_w
+                    h = (y2 - y1) / img_h
+                    f.write(f"{cls_id} {cx:.6f} {cy:.6f} {w:.6f} {h:.6f}\n")
 
-        # Kurze Status-Anzeige im Header
-        self.save_status.configure(text=f"✅ Gespeichert ({len(self.boxes)} Boxen)")
-        # Nach 2 Sekunden wieder ausblenden
-        if hasattr(self, '_save_status_timer'):
-            self.after_cancel(self._save_status_timer)
-        self._save_status_timer = self.after(2000, lambda: self.save_status.configure(text=""))
+            # Kurze Status-Anzeige im Header
+            self.save_status.configure(text=f"✅ Gespeichert ({len(self.boxes)} Boxen)")
+            if hasattr(self, '_save_status_timer'):
+                self.after_cancel(self._save_status_timer)
+            self._save_status_timer = self.after(2000, lambda: self.save_status.configure(text=""))
+        except Exception:
+            pass
 
     def clear_boxes(self):
         """Löscht alle Boxen."""
