@@ -225,25 +225,25 @@ class LabelingWindow(ctk.CTkToplevel):
 
         ctk.CTkLabel(left, text="🏷️ Klasse auswählen:", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=15, pady=(15, 5))
 
-        # Klassen-Buttons
+        # Scrollbarer Bereich für Klassen-Buttons
+        self.class_frame = ctk.CTkScrollableFrame(left, height=150, fg_color="transparent")
+        self.class_frame.pack(fill="x", padx=15, pady=(0, 5))
+
         self.class_buttons = []
-        colors = ["#ef4444", "#f59e0b", "#22c55e", "#3b82f6", "#8b5cf6", "#ec4899", "#06b6d4", "#84cc16"]
-        for i, cls in enumerate(self.class_names):
-            color = colors[i % len(colors)]
-            btn = ctk.CTkButton(
-                left,
-                text=f"{i}: {cls}",
-                command=lambda idx=i: self.select_class(idx),
-                fg_color=color if i == 0 else "transparent",
-                hover_color=color,
-                border_width=2,
-                border_color=color
-            )
-            btn.pack(fill="x", padx=15, pady=3)
-            self.class_buttons.append((btn, color))
+        self.build_class_buttons()
+
+        # Klasse hinzufügen
+        add_frame = ctk.CTkFrame(left, fg_color="transparent")
+        add_frame.pack(fill="x", padx=15, pady=(0, 5))
+
+        self.new_class_entry = ctk.CTkEntry(add_frame, placeholder_text="Neue Klasse...", width=160)
+        self.new_class_entry.pack(side="left")
+        self.new_class_entry.bind("<Return>", lambda e: self.add_class())
+
+        ctk.CTkButton(add_frame, text="➕", width=40, command=self.add_class).pack(side="left", padx=5)
 
         # Trennlinie
-        ctk.CTkFrame(left, height=2, fg_color="#404050").pack(fill="x", padx=15, pady=15)
+        ctk.CTkFrame(left, height=2, fg_color="#404050").pack(fill="x", padx=15, pady=10)
 
         # Aktionen
         ctk.CTkLabel(left, text="⚡ Aktionen:", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=15, pady=(0, 10))
@@ -345,6 +345,61 @@ class LabelingWindow(ctk.CTkToplevel):
 
         # Resize Event
         self.canvas.bind("<Configure>", self.on_resize)
+
+    def build_class_buttons(self):
+        """Erstellt die Klassen-Buttons dynamisch."""
+        # Alte Buttons entfernen
+        for widget in self.class_frame.winfo_children():
+            widget.destroy()
+        self.class_buttons = []
+
+        colors = ["#ef4444", "#f59e0b", "#22c55e", "#3b82f6", "#8b5cf6", "#ec4899", "#06b6d4", "#84cc16"]
+        for i, cls in enumerate(self.class_names):
+            color = colors[i % len(colors)]
+            btn = ctk.CTkButton(
+                self.class_frame,
+                text=f"{i}: {cls}",
+                command=lambda idx=i: self.select_class(idx),
+                fg_color=color if i == self.selected_class else "transparent",
+                hover_color=color,
+                border_width=2,
+                border_color=color
+            )
+            btn.pack(fill="x", pady=2)
+            self.class_buttons.append((btn, color))
+
+    def add_class(self):
+        """Fügt eine neue Klasse hinzu und speichert in data.yaml."""
+        name = self.new_class_entry.get().strip()
+        if not name:
+            return
+
+        if name in self.class_names:
+            messagebox.showwarning("Hinweis", f"Klasse '{name}' existiert bereits.")
+            return
+
+        # Klasse zur Liste hinzufügen
+        self.class_names.append(name)
+        self.new_class_entry.delete(0, "end")
+
+        # data.yaml aktualisieren
+        yaml_path = self.dataset_path / "data.yaml"
+        if yaml_path.exists():
+            with open(yaml_path) as f:
+                data = yaml.safe_load(f) or {}
+        else:
+            data = {}
+
+        # names als dict speichern {0: "class1", 1: "class2", ...}
+        data["names"] = {i: n for i, n in enumerate(self.class_names)}
+        data["nc"] = len(self.class_names)
+
+        with open(yaml_path, "w") as f:
+            yaml.dump(data, f, sort_keys=False)
+
+        # Buttons neu aufbauen
+        self.selected_class = len(self.class_names) - 1
+        self.build_class_buttons()
 
     def select_class(self, idx):
         """Wählt eine Klasse aus."""
