@@ -187,13 +187,31 @@ class LabelingWindow(ctk.CTkToplevel):
         """Lädt alle Bilder aus dem Dataset (unterstützt beide Formate)."""
         paths = get_dataset_paths(self.dataset_path)
 
-        # Bilder aus train und val laden
-        for img_dir in [paths["train_images"], paths["val_images"]]:
-            if img_dir and img_dir.exists():
-                for ext in ["*.jpg", "*.jpeg", "*.png", "*.bmp", "*.webp"]:
-                    self.image_list.extend(list(img_dir.glob(ext)))
+        # Alle bekannten Bild-Ordner sammeln
+        img_dirs = set()
 
-        self.image_list = sorted(self.image_list)
+        # Aus get_dataset_paths
+        for key in ["train_images", "val_images"]:
+            if paths[key] and paths[key].exists():
+                img_dirs.add(paths[key])
+
+        # Zusätzlich: Direkte Ordner durchsuchen (train/, valid/, val/, test/)
+        for name in ["train", "val", "valid", "test"]:
+            # Standard: images/train, images/val ...
+            d = self.dataset_path / "images" / name
+            if d.exists():
+                img_dirs.add(d)
+            # Roboflow: train/, valid/ ...
+            d = self.dataset_path / name
+            if d.exists():
+                img_dirs.add(d)
+
+        # Bilder laden
+        for img_dir in img_dirs:
+            for ext in ["*.jpg", "*.jpeg", "*.png", "*.bmp", "*.webp"]:
+                self.image_list.extend(list(img_dir.glob(ext)))
+
+        self.image_list = sorted(set(self.image_list))  # Duplikate entfernen
         self.dataset_format = paths["format"]
 
     def create_ui(self):
