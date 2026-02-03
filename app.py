@@ -1711,7 +1711,7 @@ class YOLOStudio(ctk.CTk):
 
         # Split-Auswahl
         ctk.CTkLabel(left, text="📂 Speichern in:", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=20, pady=(15, 5))
-        self.capture_split = ctk.CTkComboBox(left, values=["train", "valid", "test"], width=340)
+        self.capture_split = ctk.CTkComboBox(left, values=["train", "val", "test"], width=340)
         self.capture_split.set("train")
         self.capture_split.pack(anchor="w", padx=20)
 
@@ -2160,7 +2160,7 @@ class YOLOStudio(ctk.CTk):
         # Val-Ordner erstellen
         if not val_images_dir:
             if paths["format"] in ["roboflow", "roboflow_nested"]:
-                val_images_dir = dataset_path / "valid"
+                val_images_dir = dataset_path / "val"
             else:
                 val_images_dir = dataset_path / "images" / "val"
         val_images_dir.mkdir(parents=True, exist_ok=True)
