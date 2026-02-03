@@ -2109,6 +2109,75 @@ class YOLOStudio(ctk.CTk):
         if file:
             self.resume_model_combo.set(file)
 
+    def auto_split_if_needed(self, dataset_path):
+        """Kopiert automatisch ~15% der Train-Bilder nach Val, wenn Val leer ist."""
+        import random
+
+        paths = get_dataset_paths(str(dataset_path))
+
+        val_images_dir = paths["val_images"]
+        train_images_dir = paths["train_images"]
+
+        if not train_images_dir or not train_images_dir.exists():
+            return
+
+        # Prüfen ob Val schon Bilder hat
+        val_count = count_images(val_images_dir) if val_images_dir else 0
+        if val_count > 0:
+            return  # Val hat schon Bilder
+
+        # Train-Bilder sammeln
+        train_images = []
+        for ext in ["*.jpg", "*.jpeg", "*.png", "*.bmp", "*.webp"]:
+            train_images.extend(list(train_images_dir.glob(ext)))
+
+        if len(train_images) < 3:
+            return  # Zu wenige Bilder
+
+        # 15% für Validation, mindestens 1
+        val_size = max(1, int(len(train_images) * 0.15))
+        random.shuffle(train_images)
+        val_selection = train_images[:val_size]
+
+        # Val-Ordner erstellen
+        if not val_images_dir:
+            if paths["format"] in ["roboflow", "roboflow_nested"]:
+                val_images_dir = dataset_path / "valid"
+            else:
+                val_images_dir = dataset_path / "images" / "val"
+        val_images_dir.mkdir(parents=True, exist_ok=True)
+
+        # Labels-Ordner
+        if paths["format"] in ["roboflow", "roboflow_nested"]:
+            val_labels_dir = val_images_dir  # Gleicher Ordner bei Roboflow
+            train_labels_dir = train_images_dir
+        else:
+            val_labels_dir = dataset_path / "labels" / "val"
+            train_labels_dir = dataset_path / "labels" / "train"
+            val_labels_dir.mkdir(parents=True, exist_ok=True)
+
+        # Bilder + Labels kopieren (nicht verschieben, damit Train erhalten bleibt)
+        copied = 0
+        for img_path in val_selection:
+            # Bild kopieren
+            dest_img = val_images_dir / img_path.name
+            shutil.copy2(str(img_path), str(dest_img))
+
+            # Label kopieren wenn vorhanden
+            label_name = img_path.stem + ".txt"
+            if paths["format"] in ["roboflow", "roboflow_nested"]:
+                label_src = train_labels_dir / label_name
+            else:
+                label_src = train_labels_dir / label_name
+
+            if label_src.exists():
+                dest_label = val_labels_dir / label_name
+                shutil.copy2(str(label_src), str(dest_label))
+
+            copied += 1
+
+        return copied
+
     def start_training(self):
         """Startet Training mit Python API."""
         dataset = self.train_dataset.get()
@@ -2120,6 +2189,10 @@ class YOLOStudio(ctk.CTk):
         if not data_yaml.exists():
             messagebox.showerror("Fehler", "data.yaml nicht gefunden.")
             return
+
+        # Auto-Split: Wenn Val leer ist, 15% von Train kopieren
+        dataset_path = self.datasets_path / dataset
+        split_count = self.auto_split_if_needed(dataset_path)
 
         try:
             epochs = int(self.epochs_entry.get())
@@ -2165,6 +2238,8 @@ class YOLOStudio(ctk.CTk):
         else:
             self.log_text.insert("end", f"🎯 Fine-Tuning von: {resume_model_path}\n")
         self.log_text.insert("end", f"📊 Epochen: {epochs} | Batch: {batch} | Größe: {imgsz}\n")
+        if split_count:
+            self.log_text.insert("end", f"📂 Auto-Split: {split_count} Bilder nach Val kopiert\n")
         self.log_text.insert("end", "=" * 50 + "\n\n")
 
         # Training in Thread
