@@ -218,91 +218,85 @@ class LabelingWindow(ctk.CTkToplevel):
         main = ctk.CTkFrame(self, fg_color="transparent")
         main.pack(fill="both", expand=True, padx=10, pady=(0, 10))
 
-        # Linke Seite - Controls
-        left = ctk.CTkFrame(main, fg_color=BG_CARD, width=280, corner_radius=10)
-        left.pack(side="left", fill="y", padx=(0, 10))
-        left.pack_propagate(False)
+        # Linke Seite - Controls (scrollbar)
+        left_outer = ctk.CTkFrame(main, fg_color=BG_CARD, width=300, corner_radius=10)
+        left_outer.pack(side="left", fill="y", padx=(0, 10))
+        left_outer.pack_propagate(False)
 
-        ctk.CTkLabel(left, text="🏷️ Klasse auswählen:", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=15, pady=(15, 5))
+        left = ctk.CTkScrollableFrame(left_outer, fg_color="transparent")
+        left.pack(fill="both", expand=True)
 
-        # Scrollbarer Bereich für Klassen-Buttons
-        self.class_frame = ctk.CTkScrollableFrame(left, height=150, fg_color="transparent")
-        self.class_frame.pack(fill="x", padx=15, pady=(0, 5))
+        ctk.CTkLabel(left, text="🏷️ Klassen:", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=10, pady=(10, 5))
+
+        # Frame für Klassen-Buttons (direkt in der scrollbaren Sidebar)
+        self.class_frame = ctk.CTkFrame(left, fg_color="transparent")
+        self.class_frame.pack(fill="x", padx=10, pady=(0, 5))
 
         self.class_buttons = []
         self.build_class_buttons()
 
         # Klasse hinzufügen
         add_frame = ctk.CTkFrame(left, fg_color="transparent")
-        add_frame.pack(fill="x", padx=15, pady=(0, 5))
+        add_frame.pack(fill="x", padx=10, pady=(0, 5))
 
-        self.new_class_entry = ctk.CTkEntry(add_frame, placeholder_text="Neue Klasse...", width=160)
+        self.new_class_entry = ctk.CTkEntry(add_frame, placeholder_text="Neue Klasse...", width=170)
         self.new_class_entry.pack(side="left")
         self.new_class_entry.bind("<Return>", lambda e: self.add_class())
 
-        ctk.CTkButton(add_frame, text="➕", width=40, command=self.add_class).pack(side="left", padx=5)
+        ctk.CTkButton(add_frame, text="➕", width=50, height=28, command=self.add_class).pack(side="left", padx=5)
 
         # Trennlinie
-        ctk.CTkFrame(left, height=2, fg_color="#404050").pack(fill="x", padx=15, pady=10)
+        ctk.CTkFrame(left, height=2, fg_color="#404050").pack(fill="x", padx=10, pady=8)
 
         # Aktionen
-        ctk.CTkLabel(left, text="⚡ Aktionen:", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=15, pady=(0, 10))
+        ctk.CTkLabel(left, text="⚡ Aktionen:", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=10, pady=(0, 5))
 
         ctk.CTkButton(
             left, text="💾 Labels speichern",
             command=self.save_labels,
-            fg_color=SUCCESS,
-            width=240
-        ).pack(padx=15, pady=5)
+            fg_color=SUCCESS
+        ).pack(fill="x", padx=10, pady=3)
 
         self.delete_selected_btn = ctk.CTkButton(
             left, text="❌ Ausgewählte Box löschen",
             command=self.delete_selected_box,
             fg_color=DANGER,
-            width=240,
             state="disabled"
         )
-        self.delete_selected_btn.pack(padx=15, pady=5)
+        self.delete_selected_btn.pack(fill="x", padx=10, pady=3)
 
         ctk.CTkButton(
             left, text="↩️ Letzte Box löschen",
-            command=self.delete_last_box,
-            width=240
-        ).pack(padx=15, pady=5)
+            command=self.delete_last_box
+        ).pack(fill="x", padx=10, pady=3)
 
         ctk.CTkButton(
             left, text="🗑️ Alle Boxen löschen",
             command=self.clear_boxes,
-            fg_color="#7f1d1d",
-            width=240
-        ).pack(padx=15, pady=5)
+            fg_color="#7f1d1d"
+        ).pack(fill="x", padx=10, pady=3)
 
         # Hilfe
         help_frame = ctk.CTkFrame(left, fg_color="#1e3a5f", corner_radius=10)
-        help_frame.pack(fill="x", padx=15, pady=20)
+        help_frame.pack(fill="x", padx=10, pady=10)
 
         ctk.CTkLabel(
             help_frame,
-            text="💡 Anleitung:",
-            font=ctk.CTkFont(weight="bold")
-        ).pack(anchor="w", padx=10, pady=(10, 5))
-
-        ctk.CTkLabel(
-            help_frame,
-            text="Linksklick + Ziehen = Box zeichnen\n"
+            text="Linksklick = Box zeichnen\n"
                  "Rechtsklick = Box auswählen\n"
-                 "Mausrad = Rein/Raus zoomen\n"
-                 "Ctrl+Ziehen = Bild verschieben\n"
-                 "Taste 0 = Zoom zurücksetzen",
+                 "Mausrad = Zoomen\n"
+                 "Ctrl+Ziehen = Verschieben\n"
+                 "Taste 0 = Zoom Reset",
             text_color=TEXT_MUTED,
-            justify="left"
-        ).pack(anchor="w", padx=10, pady=(0, 10))
+            justify="left",
+            font=ctk.CTkFont(size=11)
+        ).pack(padx=8, pady=8)
 
         # Box-Liste
-        ctk.CTkLabel(left, text="📦 Boxen:", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=15, pady=(10, 5))
+        ctk.CTkLabel(left, text="📦 Boxen:", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=10, pady=(5, 3))
 
-        self.box_list = ctk.CTkTextbox(left, height=150)
-        self.box_list.pack(fill="x", padx=15, pady=(0, 15))
+        self.box_list = ctk.CTkTextbox(left, height=120)
+        self.box_list.pack(fill="x", padx=10, pady=(0, 10))
 
         # Rechte Seite - Canvas für Bild
         right = ctk.CTkFrame(main, fg_color=BG_CARD, corner_radius=10)
