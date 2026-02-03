@@ -156,9 +156,16 @@ class LabelingWindow(ctk.CTkToplevel):
         self.start_x = 0
         self.start_y = 0
         self.current_rect = None
-        self.scale = 1.0
+        self.base_scale = 1.0
+        self.zoom_level = 1.0
+        self.scale = 1.0  # base_scale * zoom_level
         self.offset_x = 0
         self.offset_y = 0
+        self.pan_x = 0  # Pan-Offset (Pixel auf Canvas)
+        self.pan_y = 0
+        self.panning = False
+        self.pan_start_x = 0
+        self.pan_start_y = 0
         self.selected_class = 0
         self.selected_box = -1  # Ausgewählte Box (-1 = keine)
 
@@ -284,7 +291,9 @@ class LabelingWindow(ctk.CTkToplevel):
             help_frame,
             text="Linksklick + Ziehen = Box zeichnen\n"
                  "Rechtsklick = Box auswählen\n"
-                 "Dann 'Ausgewählte löschen'",
+                 "Mausrad = Rein/Raus zoomen\n"
+                 "Ctrl+Ziehen = Bild verschieben\n"
+                 "Taste 0 = Zoom zurücksetzen",
             text_color=TEXT_MUTED,
             justify="left"
         ).pack(anchor="w", padx=10, pady=(0, 10))
@@ -309,6 +318,22 @@ class LabelingWindow(ctk.CTkToplevel):
         self.canvas.bind("<ButtonRelease-1>", self.on_mouse_up)
         self.canvas.bind("<ButtonPress-3>", self.on_right_click)  # Rechtsklick = Box auswählen
 
+        # Zoom (Mausrad)
+        self.canvas.bind("<MouseWheel>", self.on_mouse_wheel)  # Windows/Mac
+        self.canvas.bind("<Button-4>", self.on_mouse_wheel)     # Linux scroll up
+        self.canvas.bind("<Button-5>", self.on_mouse_wheel)     # Linux scroll down
+
+        # Pan (Mittelklick oder Ctrl+Linksklick)
+        self.canvas.bind("<ButtonPress-2>", self.on_pan_start)
+        self.canvas.bind("<B2-Motion>", self.on_pan_move)
+        self.canvas.bind("<ButtonRelease-2>", self.on_pan_end)
+        self.canvas.bind("<Control-ButtonPress-1>", self.on_pan_start)
+        self.canvas.bind("<Control-B1-Motion>", self.on_pan_move)
+        self.canvas.bind("<Control-ButtonRelease-1>", self.on_pan_end)
+
+        # Zoom Reset (Doppelklick Mitte oder Taste 0)
+        self.bind("<Key-0>", self.reset_zoom)
+
         # Resize Event
         self.canvas.bind("<Configure>", self.on_resize)
 
@@ -328,6 +353,11 @@ class LabelingWindow(ctk.CTkToplevel):
 
         self.current_index = index
         self.current_image_path = self.image_list[index]
+
+        # Zoom/Pan zurücksetzen bei neuem Bild
+        self.zoom_level = 1.0
+        self.pan_x = 0
+        self.pan_y = 0
 
         # Bild laden
         self.current_image = Image.open(self.current_image_path)
@@ -386,7 +416,7 @@ class LabelingWindow(ctk.CTkToplevel):
             return self.current_image_path.with_suffix(".txt")
 
     def display_image(self):
-        """Zeigt das Bild auf dem Canvas an."""
+        """Zeigt das Bild auf dem Canvas an mit Zoom und Pan."""
         if not self.current_image:
             return
 
@@ -399,18 +429,21 @@ class LabelingWindow(ctk.CTkToplevel):
         if canvas_w < 10 or canvas_h < 10:
             return
 
-        # Skalierung berechnen
+        # Basis-Skalierung (Bild einpassen)
         img_w, img_h = self.current_image.size
         scale_w = canvas_w / img_w
         scale_h = canvas_h / img_h
-        self.scale = min(scale_w, scale_h, 1.0)  # Maximal Originalgröße
+        self.base_scale = min(scale_w, scale_h, 1.0)
+
+        # Gesamt-Skalierung mit Zoom
+        self.scale = self.base_scale * self.zoom_level
 
         new_w = int(img_w * self.scale)
         new_h = int(img_h * self.scale)
 
-        # Offset für Zentrierung
-        self.offset_x = (canvas_w - new_w) // 2
-        self.offset_y = (canvas_h - new_h) // 2
+        # Offset für Zentrierung + Pan
+        self.offset_x = (canvas_w - new_w) // 2 + self.pan_x
+        self.offset_y = (canvas_h - new_h) // 2 + self.pan_y
 
         # Bild skalieren und anzeigen
         resized = self.current_image.resize((new_w, new_h), Image.Resampling.LANCZOS)
@@ -429,7 +462,6 @@ class LabelingWindow(ctk.CTkToplevel):
             is_selected = (i == self.selected_box)
             color = colors[cls_id % len(colors)]
             width = 4 if is_selected else 2
-            dash = () if not is_selected else ()
 
             self.canvas.create_rectangle(sx1, sy1, sx2, sy2, outline=color, width=width)
 
@@ -440,14 +472,92 @@ class LabelingWindow(ctk.CTkToplevel):
             # Label
             label = self.class_names[cls_id] if cls_id < len(self.class_names) else f"Klasse {cls_id}"
             prefix = ">> " if is_selected else ""
-            self.canvas.create_text(sx1 + 5, sy1 + 5, text=f"{prefix}{label}", fill=color, anchor="nw", font=("Arial", 10, "bold"))
+            font_size = max(8, int(10 * min(self.zoom_level, 3)))
+            self.canvas.create_text(sx1 + 5, sy1 + 5, text=f"{prefix}{label}", fill=color, anchor="nw", font=("Arial", font_size, "bold"))
+
+        # Zoom-Anzeige
+        if self.zoom_level != 1.0:
+            zoom_text = f"🔍 {self.zoom_level:.1f}x"
+            self.canvas.create_text(10, canvas_h - 10, text=zoom_text, fill="#888888", anchor="sw", font=("Arial", 12))
 
     def on_resize(self, event):
         """Wird aufgerufen wenn Canvas-Größe sich ändert."""
         self.display_image()
 
+    def on_mouse_wheel(self, event):
+        """Zoom mit Mausrad - zoomt zur Mausposition."""
+        if not self.current_image:
+            return
+
+        # Mausposition auf Canvas
+        mouse_x = event.x
+        mouse_y = event.y
+
+        # Zoom-Faktor bestimmen
+        if event.num == 4 or (hasattr(event, 'delta') and event.delta > 0):
+            factor = 1.15
+        elif event.num == 5 or (hasattr(event, 'delta') and event.delta < 0):
+            factor = 1 / 1.15
+        else:
+            return
+
+        old_zoom = self.zoom_level
+        self.zoom_level = max(0.5, min(old_zoom * factor, 20.0))
+
+        # Pan anpassen damit Zoom zur Mausposition geht
+        # Bild-Mitte auf Canvas (ohne Pan)
+        canvas_w = self.canvas.winfo_width()
+        canvas_h = self.canvas.winfo_height()
+        img_w, img_h = self.current_image.size
+
+        old_scale = self.base_scale * old_zoom
+        new_scale = self.base_scale * self.zoom_level
+
+        # Position unter der Maus in Bildkoordinaten
+        img_x = (mouse_x - self.offset_x) / old_scale
+        img_y = (mouse_y - self.offset_y) / old_scale
+
+        # Neue Offsets berechnen
+        new_w = int(img_w * new_scale)
+        new_h = int(img_h * new_scale)
+        new_center_x = (canvas_w - new_w) // 2
+        new_center_y = (canvas_h - new_h) // 2
+
+        # Pan so anpassen, dass img_x/img_y weiterhin unter der Maus liegt
+        self.pan_x = int(mouse_x - new_center_x - img_x * new_scale)
+        self.pan_y = int(mouse_y - new_center_y - img_y * new_scale)
+
+        self.display_image()
+
+    def on_pan_start(self, event):
+        """Pan starten (Mittelklick oder Ctrl+Linksklick)."""
+        self.panning = True
+        self.pan_start_x = event.x - self.pan_x
+        self.pan_start_y = event.y - self.pan_y
+
+    def on_pan_move(self, event):
+        """Pan bewegen."""
+        if self.panning:
+            self.pan_x = event.x - self.pan_start_x
+            self.pan_y = event.y - self.pan_start_y
+            self.display_image()
+
+    def on_pan_end(self, event):
+        """Pan beenden."""
+        self.panning = False
+
+    def reset_zoom(self, event=None):
+        """Zoom und Pan zurücksetzen."""
+        self.zoom_level = 1.0
+        self.pan_x = 0
+        self.pan_y = 0
+        self.display_image()
+
     def on_mouse_down(self, event):
         """Maus gedrückt - Start einer Box."""
+        # Ctrl+Klick = Pan, nicht zeichnen
+        if event.state & 0x4:  # Ctrl gedrückt
+            return
         self.drawing = True
         self.start_x = event.x
         self.start_y = event.y
